@@ -61,6 +61,18 @@ type StartupAppSnapshot = {
 
 type StartupActionStatus = { kind: "success" | "error"; message: string };
 
+type OperationRecord = {
+  id: string;
+  timestamp: number;
+  category: "Process" | "Service" | "Startup" | "Storage" | "Maintenance";
+  action: string;
+  target: string;
+  outcome: "success" | "failed";
+  note: string;
+};
+
+type OperationDetails = Omit<OperationRecord, "id" | "timestamp">;
+
 type ServiceSnapshot = {
   unit: string;
   description: string;
@@ -207,7 +219,7 @@ type RawProcessSnapshot = Omit<ProcessSnapshot, "diskReadBytesPerSecond" | "disk
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
 type TemperatureUnit = "celsius" | "fahrenheit";
 
-type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "logs" | "maintenance" | "settings" | "performance" | "sensors";
+type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "logs" | "activity" | "maintenance" | "settings" | "performance" | "sensors";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory" | "read" | "write";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 type ProcessStateFilter = "all" | "running" | "sleeping" | "stopped" | "zombie";
@@ -267,6 +279,43 @@ function formatUptime(seconds: number): string {
   if (days > 0) return `${days}d ${hours}h ${minutes}m`;
   if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
+}
+
+const OPERATION_HISTORY_KEY = "kestrel.operation-history";
+const MAX_OPERATION_HISTORY = 250;
+
+function readOperationHistory(): OperationRecord[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(OPERATION_HISTORY_KEY) ?? "[]");
+    if (!Array.isArray(value)) return [];
+    return value.filter((entry): entry is OperationRecord =>
+      typeof entry === "object" && entry !== null
+      && typeof entry.id === "string"
+      && typeof entry.timestamp === "number"
+      && ["Process", "Service", "Startup", "Storage", "Maintenance"].includes(entry.category)
+      && typeof entry.action === "string"
+      && typeof entry.target === "string"
+      && (entry.outcome === "success" || entry.outcome === "failed")
+      && typeof entry.note === "string",
+    ).slice(0, MAX_OPERATION_HISTORY);
+  } catch {
+    return [];
+  }
+}
+
+function appendOperationHistory(details: OperationDetails): OperationRecord[] {
+  const entry: OperationRecord = {
+    ...details,
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    timestamp: Date.now(),
+  };
+  const next = [entry, ...readOperationHistory()].slice(0, MAX_OPERATION_HISTORY);
+  try {
+    localStorage.setItem(OPERATION_HISTORY_KEY, JSON.stringify(next));
+  } catch {
+    // Keep the in-memory record visible for this session if local storage is unavailable.
+  }
+  return next;
 }
 
 function readTemperatureUnit(): TemperatureUnit {
@@ -335,6 +384,7 @@ function serviceActionImpact(service: ServiceSnapshot, action: "start" | "stop" 
 
 function App() {
   const [page, setPage] = useState<AppPage>("overview");
+  const [operationHistory, setOperationHistory] = useState<OperationRecord[]>(readOperationHistory);
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot | null>(null);
   const [telemetryError, setTelemetryError] = useState<string | null>(null);
   const [temperatures, setTemperatures] = useState<TemperatureSnapshot[]>([]);
@@ -1120,6 +1170,20 @@ function App() {
     }));
   }
 
+  function recordOperation(details: OperationDetails) {
+    setOperationHistory(appendOperationHistory(details));
+  }
+
+  function clearOperationHistory() {
+    if (!window.confirm("Clear Kestrel’s local operation history? This removes the recorded entries from this device and does not undo those actions.")) return;
+    try {
+      localStorage.removeItem(OPERATION_HISTORY_KEY);
+    } catch {
+      // Clearing the visible session history is still useful if storage is unavailable.
+    }
+    setOperationHistory([]);
+  }
+
   async function requestPartitionMount(partition: PartitionSnapshot, mount: boolean) {
     if (partition.deviceType !== "part" || partitionActionPath) return;
     if (!mount) {
@@ -1138,9 +1202,11 @@ function App() {
         kind: "success",
         message: result || `${partition.path} ${mount ? "mounted" : "unmounted"} successfully.`,
       });
+      recordOperation({ category: "Storage", action: mount ? "Mount volume" : "Unmount volume", target: partition.path, outcome: "success", note: "Linux completed the requested volume action." });
       setPartitionRefreshKey((current) => current + 1);
     } catch (error) {
       setPartitionActionStatus({ kind: "error", message: String(error) });
+      recordOperation({ category: "Storage", action: mount ? "Mount volume" : "Unmount volume", target: partition.path, outcome: "failed", note: "Kestrel could not complete the requested volume action." });
     } finally {
       setPartitionActionPath(null);
     }
@@ -1174,11 +1240,13 @@ function App() {
           ? `${startupApp.name} is ${enabled ? "enabled" : "disabled"} for your next sign-in.`
           : `${startupApp.name} will ${action} at your next sign-in.`,
       });
+      recordOperation({ category: "Startup", action: `${enabled ? "Enable" : "Disable"} at sign-in`, target: startupApp.name, outcome: "success", note: startupApp.isSystemEntry ? "Changed a per-user override; the shared system file was not edited." : "Changed this account’s startup entry." });
     } catch (error) {
       setStartupActionStatus({
         kind: "error",
         message: `Could not ${action} ${startupApp.name}: ${String(error)}`,
       });
+      recordOperation({ category: "Startup", action: `${enabled ? "Enable" : "Disable"} at sign-in`, target: startupApp.name, outcome: "failed", note: "Kestrel could not update the startup entry." });
     } finally {
       setStartupActionId(null);
     }
@@ -1203,11 +1271,13 @@ function App() {
         kind: "success",
         message: `Termination requested for ${name} (PID ${process.pid}). It may take a moment to exit.`,
       });
+      recordOperation({ category: "Process", action: "End process", target: `${name} (PID ${process.pid})`, outcome: "success", note: "A normal termination signal was sent." });
     } catch (error) {
       setProcessActionStatus({
         kind: "error",
         message: `Could not end ${name} (PID ${process.pid}): ${String(error)}`,
       });
+      recordOperation({ category: "Process", action: "End process", target: `${name} (PID ${process.pid})`, outcome: "failed", note: "Linux did not complete the requested termination." });
     } finally {
       setTerminatingPid(null);
     }
@@ -1230,8 +1300,10 @@ function App() {
         expectedStartTime: process.startTime,
       });
       setProcessActionStatus({ kind: "success", message: `Force-stop signal sent to ${name} (PID ${process.pid}).` });
+      recordOperation({ category: "Process", action: "Force stop process", target: `${name} (PID ${process.pid})`, outcome: "success", note: "An immediate kill signal was sent; unsaved work may be lost." });
     } catch (error) {
       setProcessActionStatus({ kind: "error", message: `Could not force stop ${name} (PID ${process.pid}): ${String(error)}` });
+      recordOperation({ category: "Process", action: "Force stop process", target: `${name} (PID ${process.pid})`, outcome: "failed", note: "Linux did not complete the requested signal." });
     } finally {
       setTerminatingPid(null);
     }
@@ -1266,9 +1338,11 @@ function App() {
       setServiceActionPhase("action");
       await invoke("set_service_state", { scope: service.scope, unit: service.unit, action });
       setServiceActionStatus({ kind: "success", message: `${service.unit}: ${actionLabel.toLowerCase()} request completed.` });
+      recordOperation({ category: "Service", action: `${actionLabel} service`, target: `${service.scope} · ${service.unit}`, outcome: "success", note: "The service manager completed the request." });
       setServiceRefreshKey((key) => key + 1);
     } catch (error) {
       setServiceActionStatus({ kind: "error", message: `Could not ${action} ${service.unit}: ${String(error)}` });
+      recordOperation({ category: "Service", action: `${actionLabel} service`, target: `${service.scope} · ${service.unit}`, outcome: "failed", note: "The service manager did not complete the request." });
     } finally {
       setServiceActionUnit(null);
     }
@@ -1412,9 +1486,11 @@ function App() {
     try {
       await invoke("clear_cache_entry", { directoryName: entry.name });
       setCacheActionStatus({ kind: "success", message: `Cleared the ${entry.name} cache folder.` });
+      recordOperation({ category: "Maintenance", action: "Clear application cache", target: entry.name, outcome: "success", note: "Cache contents were removed and can be rebuilt by the application." });
       await inspectCacheSizes();
     } catch (error) {
       setCacheActionStatus({ kind: "error", message: `Could not clear ${entry.name}: ${String(error)}` });
+      recordOperation({ category: "Maintenance", action: "Clear application cache", target: entry.name, outcome: "failed", note: "Kestrel could not complete the cache cleanup." });
     } finally {
       setCacheActionName(null);
     }
@@ -1541,6 +1617,13 @@ function App() {
             <span>≡</span> Recent Logs
           </button>
           <button
+            className={`nav-item${page === "activity" ? " active" : ""}`}
+            aria-current={page === "activity" ? "page" : undefined}
+            onClick={() => setPage("activity")}
+          >
+            <span>↺</span> Activity
+          </button>
+          <button
             className={`nav-item${page === "maintenance" ? " active" : ""}`}
             aria-current={page === "maintenance" ? "page" : undefined}
             onClick={() => setPage("maintenance")}
@@ -1600,6 +1683,8 @@ function App() {
                               ? "SUPPORT TOOLS"
                               : page === "logs"
                               ? "SYSTEM JOURNAL"
+                              : page === "activity"
+                                ? "LOCAL ACTION HISTORY"
                               : page === "maintenance"
                                 ? "STORAGE TOOLS"
                                 : page === "settings"
@@ -1608,7 +1693,7 @@ function App() {
                                     ? "HARDWARE TEMPERATURES"
                                     : "LIVE TELEMETRY"}
             </p>
-            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : page === "diagnostics" ? "Diagnostics" : page === "logs" ? "Recent Logs" : page === "maintenance" ? "Maintenance" : page === "settings" ? "Settings" : page === "sensors" ? "Sensors" : "Performance"}</h1>
+            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : page === "diagnostics" ? "Diagnostics" : page === "logs" ? "Recent Logs" : page === "activity" ? "Activity" : page === "maintenance" ? "Maintenance" : page === "settings" ? "Settings" : page === "sensors" ? "Sensors" : "Performance"}</h1>
             <p className="subheading">
               {page === "overview"
                 ? "A clear view of your workstation, at a glance."
@@ -1628,6 +1713,8 @@ function App() {
                             ? "Create a local support summary and review it before saving."
                             : page === "logs"
                               ? "Review recent system messages from this boot. Entries are read-only and stay on this device."
+                              : page === "activity"
+                                ? "Review local records of process, service, startup, storage, and maintenance actions."
                               : page === "maintenance"
                               ? "Review large files and application cache usage without changing anything."
                               : page === "settings"
@@ -1672,6 +1759,8 @@ function App() {
                                   : "status-dot"
                                 : page === "logs"
                                 ? systemLogsError ? "status-dot muted" : "status-dot"
+                              : page === "activity"
+                                ? "status-dot"
                               : page === "maintenance"
                                   ? largeFileError || cacheError || logError
                                     ? "status-dot muted"
@@ -1725,6 +1814,8 @@ function App() {
                               ? diagnosticsStatus?.message ?? (diagnosticsLoading ? "Collecting local details" : diagnosticsSnapshot ? "Report ready for review" : "No report collected")
                               : page === "logs"
                                 ? systemLogsError ? "System journal unavailable" : systemLogsLoading ? "Reading system journal" : `${systemLogs.length} recent entries`
+                              : page === "activity"
+                                ? `${operationHistory.length} recorded actions`
                               : page === "maintenance"
                                 ? largeFileError || cacheError || logError ? "Maintenance scan unavailable" : largeFileLoading || cacheLoading || logLoading ? "Scanning local files" : largeFileScan ? (largeFileScan.files.length + " large files found") : cacheInventory ? (formatProcessMemory(cacheInventory.totalBytes) + " in caches") : logInventory ? "Log sizes inspected" : "No folder scanned"
                                 : page === "settings"
@@ -2934,6 +3025,37 @@ function App() {
               <div className="storage-message" role="status">No diagnostics have been collected. Choose “Collect report” to prepare a preview.</div>
             ) : null}
             <p className="service-footnote">Kestrel does not upload this report. Saving is optional and requires you to choose a file location.</p>
+          </section>
+        ) : page === "activity" ? (
+          <section className="activity-page" aria-labelledby="activity-title">
+            <div className="logs-toolbar">
+              <div>
+                <h2 id="activity-title">Kestrel operation history</h2>
+                <p>{operationHistory.length} of {MAX_OPERATION_HISTORY} most recent actions · stored on this device</p>
+              </div>
+              <button className="startup-refresh-button" onClick={clearOperationHistory} disabled={operationHistory.length === 0}>Clear history</button>
+            </div>
+            {operationHistory.length === 0 ? (
+              <div className="storage-message" role="status">No Kestrel actions have been recorded yet.</div>
+            ) : (
+              <div className="activity-list">
+                {operationHistory.map((entry) => (
+                  <article className={`activity-entry ${entry.outcome}`} key={entry.id}>
+                    <div className="activity-entry-meta">
+                      <time dateTime={new Date(entry.timestamp).toISOString()}>{new Date(entry.timestamp).toLocaleString()}</time>
+                      <span>{entry.category}</span>
+                      <strong className={entry.outcome}>{entry.outcome === "success" ? "Completed" : "Failed"}</strong>
+                    </div>
+                    <div className="activity-entry-body">
+                      <h3>{entry.action}</h3>
+                      <p className="activity-target">{entry.target}</p>
+                      <p>{entry.note}</p>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+            <p className="service-footnote">This history stays in Kestrel’s local app storage and keeps at most 250 entries. It records action names and targets, not command arguments, file contents, or credentials. Clearing the history does not undo any action.</p>
           </section>
         ) : page === "logs" ? (
           <section className="logs-page" aria-labelledby="system-logs-title">

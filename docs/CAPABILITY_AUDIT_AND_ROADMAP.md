@@ -29,6 +29,7 @@ The following capabilities are present in the code at the audited revision. A li
 | Storage | Shows mounted-volume usage; discovers partitions and mount points; uses UDisks for user-confirmed mount and unmount; reads cached SMART health via UDisks when available. SMART self-tests, filesystem repair, formatting, partition creation, and partition deletion are not implemented. |
 | Network | Shows local interface addresses and traffic rates, the configured default route, and resolver addresses. It is an observer today: it does not connect/disconnect Wi-Fi, change IP/DNS/routes, or manage firewall rules. |
 | Startup | Lists XDG user and system autostart entries. User entries can be enabled or disabled directly; system defaults can be enabled or disabled for the current account by creating/updating a per-user XDG override. Shared system files are not modified. |
+| Activity | Keeps a local, bounded history of process, service, startup, storage mount, and cache cleanup actions, including timestamps and success/failure status. The user can clear it; it does not undo actions. |
 | Services | Lists system and user systemd services, filters service states, refreshes status, shows recent service logs, and offers start, stop, enable, or disable for listed services after a consequence-specific confirmation. The former application-level service denylist has been removed; systemd and Linux authorization decide whether a requested action can run. |
 | System information | Shows OS/kernel, processor, memory, architecture, host/session information, uptime, battery charge, battery health estimate and cycle count when exported by Linux, and USB device metadata. USB serial numbers and device contents are not read. |
 | Sensors | Shows temperature sensors and critical limits when the kernel exposes them. It does not control fan curves, GPU power, or other firmware controls. |
@@ -115,7 +116,8 @@ Deliver one tested vertical slice and one Git commit at a time. Update this docu
 - Add per-action scope/risk descriptions, confirmation, Polkit authorization, progress, cancellation where supported, and actionable errors.
 - [x] Add current-account startup overrides for system-provided XDG entries; shared system startup files remain unchanged.
 - [ ] Add shared system startup editing through a narrowly scoped authorization helper, plus an elevated process-signal retry.
-- Add an operation history with timestamp, action, target, result, and recovery guidance; omit sensitive command arguments and secrets.
+- [x] Add a local operation history for process, service, startup, storage mount, and cache actions, with timestamps and outcomes. It stores at most 250 entries and omits command arguments and error details.
+- [ ] Expand operation history to other mutating features as they are added, and add structured recovery/undo guidance where the operating system supports it.
 - Keep OS impossibilities and Kestrel self-protection as explicit invariants.
 
 ### 2. Complete software management

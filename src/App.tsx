@@ -130,8 +130,9 @@ type ProcessSnapshot = {
 };
 
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
+type TemperatureUnit = "celsius" | "fahrenheit";
 
-type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "maintenance";
+type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "maintenance" | "settings";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 
@@ -184,6 +185,23 @@ function formatUptime(seconds: number): string {
   return `${minutes}m`;
 }
 
+function readTemperatureUnit(): TemperatureUnit {
+  try {
+    return localStorage.getItem("kestrel.temperature-unit") === "fahrenheit" ? "fahrenheit" : "celsius";
+  } catch {
+    return "celsius";
+  }
+}
+
+function readHistoryWindow(): number {
+  try {
+    const saved = Number(localStorage.getItem("kestrel.history-window"));
+    return [300, 900, 1800].includes(saved) ? saved : 300;
+  } catch {
+    return 300;
+  }
+}
+
 function App() {
   const [page, setPage] = useState<AppPage>("overview");
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot | null>(null);
@@ -192,7 +210,8 @@ function App() {
   const [temperatureError, setTemperatureError] = useState<string | null>(null);
   const [temperatureLoading, setTemperatureLoading] = useState(false);
   const [history, setHistory] = useState<HistorySample[]>([]);
-  const [historyWindow, setHistoryWindow] = useState(300);
+  const [historyWindow, setHistoryWindow] = useState(readHistoryWindow);
+  const [temperatureUnit, setTemperatureUnit] = useState<TemperatureUnit>(readTemperatureUnit);
   const [drives, setDrives] = useState<DriveSnapshot[]>([]);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [partitions, setPartitions] = useState<PartitionSnapshot[]>([]);
@@ -253,6 +272,15 @@ function App() {
   const [selectedProcessPid, setSelectedProcessPid] = useState<number | null>(null);
   const [processActionStatus, setProcessActionStatus] =
     useState<ProcessActionStatus | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("kestrel.temperature-unit", temperatureUnit);
+      localStorage.setItem("kestrel.history-window", String(historyWindow));
+    } catch {
+      // Preferences still work for this session if local storage is unavailable.
+    }
+  }, [temperatureUnit, historyWindow]);
 
   useEffect(() => {
     let active = true;
@@ -609,7 +637,9 @@ function App() {
     {
       label: "Temperature",
       value: hottestTemperature
-        ? `${Math.round(hottestTemperature.temperatureCelsius)}°C`
+        ? temperatureUnit === "celsius"
+          ? `${Math.round(hottestTemperature.temperatureCelsius)}°C`
+          : `${Math.round((hottestTemperature.temperatureCelsius * 9) / 5 + 32)}°F`
         : "Unavailable",
       detail: hottestTemperature
         ? `${hottestTemperature.label || "System sensor"} · highest available reading`
@@ -618,7 +648,7 @@ function App() {
           : temperatureLoading
             ? "Checking for sensors"
             : "No readable temperature sensors",
-      icon: "°C",
+      icon: temperatureUnit === "celsius" ? "°C" : "°F",
     },
   ];
 
@@ -980,8 +1010,12 @@ function App() {
           >
             <span>⌕</span> Maintenance
           </button>
-          <button className="nav-item upcoming" disabled title="Coming later">
-            <span>⚙</span> Settings <small>SOON</small>
+          <button
+            className={`nav-item${page === "settings" ? " active" : ""}`}
+            aria-current={page === "settings" ? "page" : undefined}
+            onClick={() => setPage("settings")}
+          >
+            <span>⚙</span> Settings
           </button>
         </nav>
 
@@ -1020,9 +1054,11 @@ function App() {
                             ? "DEVICE INFORMATION"
                             : page === "diagnostics"
                               ? "SUPPORT TOOLS"
-                              : "STORAGE TOOLS"}
+                              : page === "maintenance"
+                                ? "STORAGE TOOLS"
+                                : "PREFERENCES"}
             </p>
-            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : page === "diagnostics" ? "Diagnostics" : "Maintenance"}</h1>
+            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : page === "diagnostics" ? "Diagnostics" : page === "maintenance" ? "Maintenance" : "Settings"}</h1>
             <p className="subheading">
               {page === "overview"
                 ? "A clear view of your workstation, at a glance."
@@ -1040,7 +1076,9 @@ function App() {
                             ? "Review operating system, hardware, and desktop session details."
                             : page === "diagnostics"
                             ? "Create a local support summary and review it before saving."
-                            : "Review large files and application cache usage without changing anything."}
+                            : page === "maintenance"
+                              ? "Review large files and application cache usage without changing anything."
+                              : "Choose how Kestrel displays information on this device."}
             </p>
           </div>
           <div className="refresh-state">
@@ -1076,8 +1114,10 @@ function App() {
                                 ? diagnosticsStatus?.kind === "error"
                                   ? "status-dot muted"
                                   : "status-dot"
-                                : largeFileError || cacheError || logError
-                                  ? "status-dot muted"
+                                : page === "maintenance"
+                                  ? largeFileError || cacheError || logError
+                                    ? "status-dot muted"
+                                    : "status-dot"
                                   : "status-dot"
               }
             />
@@ -1119,7 +1159,9 @@ function App() {
                                 : systemInfo?.operatingSystem ?? "System information unavailable"
                             : page === "diagnostics"
                               ? diagnosticsStatus?.message ?? (diagnosticsLoading ? "Collecting local details" : diagnosticsSnapshot ? "Report ready for review" : "No report collected")
-                              : largeFileError || cacheError || logError ? "Maintenance scan unavailable" : largeFileLoading || cacheLoading || logLoading ? "Scanning local files" : largeFileScan ? (largeFileScan.files.length + " large files found") : cacheInventory ? (formatProcessMemory(cacheInventory.totalBytes) + " in caches") : logInventory ? "Log sizes inspected" : "No folder scanned"}
+                              : page === "maintenance"
+                                ? largeFileError || cacheError || logError ? "Maintenance scan unavailable" : largeFileLoading || cacheLoading || logLoading ? "Scanning local files" : largeFileScan ? (largeFileScan.files.length + " large files found") : cacheInventory ? (formatProcessMemory(cacheInventory.totalBytes) + " in caches") : logInventory ? "Log sizes inspected" : "No folder scanned"
+                                : "Preferences saved locally"}
           </div>
         </section>
 
@@ -1984,7 +2026,7 @@ function App() {
             </section>
             <p className="service-footnote">This finder only reports large files. It does not select files for deletion, clean caches, or change permissions.</p>
           </section>
-        ) : (
+        ) : page === "diagnostics" ? (
           <section className="diagnostics-page" aria-labelledby="diagnostics-page-title">
             <div className="diagnostics-heading">
               <div>
@@ -2016,6 +2058,45 @@ function App() {
               <div className="storage-message" role="status">No diagnostics have been collected. Choose “Collect report” to prepare a preview.</div>
             ) : null}
             <p className="service-footnote">Kestrel does not upload this report. Saving is optional and requires you to choose a file location.</p>
+          </section>
+        ) : (
+          <section className="settings-page" aria-labelledby="settings-page-title">
+            <div className="settings-page-heading">
+              <h2 id="settings-page-title">Display preferences</h2>
+              <p>These choices are stored locally for this Kestrel installation.</p>
+            </div>
+            <div className="settings-list">
+              <div className="settings-row">
+                <div>
+                  <h3>Temperature units</h3>
+                  <p>Choose how hardware temperatures appear on the Overview.</p>
+                </div>
+                <select
+                  aria-label="Temperature units"
+                  value={temperatureUnit}
+                  onChange={(event) => setTemperatureUnit(event.target.value as TemperatureUnit)}
+                >
+                  <option value="celsius">Celsius (°C)</option>
+                  <option value="fahrenheit">Fahrenheit (°F)</option>
+                </select>
+              </div>
+              <div className="settings-row">
+                <div>
+                  <h3>Performance chart range</h3>
+                  <p>Choose the time range shown when you open the Overview.</p>
+                </div>
+                <select
+                  aria-label="Default performance chart range"
+                  value={historyWindow}
+                  onChange={(event) => setHistoryWindow(Number(event.target.value))}
+                >
+                  <option value={300}>5 minutes</option>
+                  <option value={900}>15 minutes</option>
+                  <option value={1800}>30 minutes</option>
+                </select>
+              </div>
+            </div>
+            <p className="service-footnote">The temperature preference changes display units only. Kestrel keeps collecting the same local sensor readings.</p>
           </section>
         )}
       </main>

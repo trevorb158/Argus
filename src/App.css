@@ -2305,3 +2305,81 @@ h1 {
   font-size: 11px;
   font-weight: 600;
 }
+
+
+.settings-page {
+  padding: 20px;
+  border: 1px solid #252d37;
+  border-radius: 11px;
+  background: linear-gradient(145deg, rgba(22, 28, 36, 0.96), rgba(16, 21, 28, 0.96));
+}
+
+.settings-page-heading {
+  margin-bottom: 16px;
+}
+
+.settings-page-heading h2 {
+  margin: 0 0 5px;
+  color: #e4eaf1;
+  font-size: 15px;
+}
+
+.settings-page-heading p,
+.settings-row p {
+  margin: 0;
+  color: #788593;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.settings-list {
+  overflow: hidden;
+  border: 1px solid #29323d;
+  border-radius: 8px;
+  background: #11171f;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-bottom: 1px solid #252d37;
+}
+
+.settings-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-row h3 {
+  margin: 0 0 5px;
+  color: #d8e0e9;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.settings-row select {
+  min-width: 150px;
+  padding: 9px;
+  border: 1px solid #29313b;
+  border-radius: 7px;
+  background: #0e1319;
+  color: #d8e0e9;
+  font: inherit;
+  font-size: 10px;
+}
+
+.settings-page > .service-footnote {
+  margin: 14px 0 0;
+  color: #707d8b;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+@media (max-width: 700px) {
+  .settings-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

@@ -27,6 +27,14 @@ type NetworkInterfaceSnapshot = NetworkCountersSnapshot & {
   uploadBytesPerSecond: number;
 };
 
+type StartupAppSnapshot = {
+  id: string;
+  name: string;
+  command: string;
+  source: string;
+  enabled: boolean;
+};
+
 type DriveSnapshot = {
   name: string;
   mountPoint: string;
@@ -60,7 +68,7 @@ type ProcessSnapshot = {
 
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
 
-type AppPage = "overview" | "processes" | "storage" | "network";
+type AppPage = "overview" | "processes" | "storage" | "network" | "startup";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 
@@ -115,6 +123,11 @@ function App() {
   const [networkInterfaces, setNetworkInterfaces] = useState<NetworkInterfaceSnapshot[]>([]);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [networkLoading, setNetworkLoading] = useState(false);
+  const [startupApps, setStartupApps] = useState<StartupAppSnapshot[]>([]);
+  const [startupError, setStartupError] = useState<string | null>(null);
+  const [startupLoading, setStartupLoading] = useState(false);
+  const [startupQuery, setStartupQuery] = useState("");
+  const [startupRefreshKey, setStartupRefreshKey] = useState(0);
   const previousNetworkCounters = useRef<Record<string, {
     receivedBytes: number;
     transmittedBytes: number;
@@ -275,6 +288,33 @@ function App() {
       window.clearTimeout(timeoutId);
     };
   }, [page]);
+
+  useEffect(() => {
+    if (page !== "startup") return;
+
+    let active = true;
+    setStartupLoading(true);
+    invoke<StartupAppSnapshot[]>("get_startup_apps")
+      .then((snapshot) => {
+        if (active) {
+          setStartupApps(snapshot);
+          setStartupError(null);
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setStartupApps([]);
+          setStartupError(String(error));
+        }
+      })
+      .finally(() => {
+        if (active) setStartupLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [page, startupRefreshKey]);
 
   useEffect(() => {
     if (page !== "network") return;
@@ -454,6 +494,16 @@ function App() {
     })
     .sort((a, b) => a.mountPoint.localeCompare(b.mountPoint));
 
+  const filteredStartupApps = startupApps.filter((startupApp) => {
+    const query = startupQuery.trim().toLocaleLowerCase();
+    return (
+      !query ||
+      startupApp.name.toLocaleLowerCase().includes(query) ||
+      startupApp.command.toLocaleLowerCase().includes(query) ||
+      startupApp.source.toLocaleLowerCase().includes(query)
+    );
+  });
+
   const filteredPartitions = partitions.filter((partition) => {
     const query = driveQuery.trim().toLocaleLowerCase();
     return (
@@ -580,6 +630,13 @@ function App() {
           >
             <span>⌘</span> Processes
           </button>
+          <button
+            className={`nav-item${page === "startup" ? " active" : ""}`}
+            aria-current={page === "startup" ? "page" : undefined}
+            onClick={() => setPage("startup")}
+          >
+            <span>◷</span> Startup
+          </button>
           <button className="nav-item upcoming" disabled title="Coming later">
             <span>⚙</span> Settings <small>SOON</small>
           </button>
@@ -610,9 +667,11 @@ function App() {
                   ? "RUNNING APPLICATIONS AND SERVICES"
                   : page === "storage"
                     ? "DISKS AND VOLUMES"
-                    : "NETWORK INTERFACES"}
+                    : page === "network"
+                      ? "NETWORK INTERFACES"
+                      : "LOGIN APPLICATIONS"}
             </p>
-            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : "Network"}</h1>
+            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : "Startup"}</h1>
             <p className="subheading">
               {page === "overview"
                 ? "A clear view of your workstation, at a glance."
@@ -620,7 +679,9 @@ function App() {
                   ? "See which programs are using your system resources."
                   : page === "storage"
                     ? "Review mounted volumes and how their space is being used."
-                    : "See live traffic and addresses for this device’s network interfaces."}
+                    : page === "network"
+                      ? "See live traffic and addresses for this device’s network interfaces."
+                      : "Review applications configured to start when you sign in."}
             </p>
           </div>
           <div className="refresh-state">
@@ -636,9 +697,13 @@ function App() {
                       ? storageError || partitionError
                         ? "status-dot muted"
                         : "status-dot"
-                      : networkError
-                        ? "status-dot muted"
-                        : "status-dot"
+                      : page === "network"
+                        ? networkError
+                          ? "status-dot muted"
+                          : "status-dot"
+                        : startupError
+                          ? "status-dot muted"
+                          : "status-dot"
               }
             />
             {page === "overview"
@@ -653,11 +718,17 @@ function App() {
                   ? storageError || partitionError
                     ? "Storage information unavailable"
                     : `${drives.length} mounted volumes`
-                  : networkError
-                    ? "Network information unavailable"
-                    : networkLoading
-                      ? "Reading interfaces"
-                      : `${networkInterfaces.length} interfaces`}
+                  : page === "network"
+                    ? networkError
+                      ? "Network information unavailable"
+                      : networkLoading
+                        ? "Reading interfaces"
+                        : `${networkInterfaces.length} interfaces`
+                    : startupError
+                      ? "Startup information unavailable"
+                      : startupLoading
+                        ? "Reading startup entries"
+                        : `${startupApps.filter((startupApp) => startupApp.enabled).length} enabled entries`}
           </div>
         </section>
 
@@ -1079,7 +1150,7 @@ function App() {
               Linux supplies this read-only partition inventory. Used and free space are shown above for mounted volumes; unmounted partitions show capacity only. Kestrel does not mount or repair drives.
             </p>
           </section>
-        ) : (
+        ) : page === "network" ? (
           <section className="network-page" aria-labelledby="network-page-title">
             <div className="network-toolbar">
               <div>
@@ -1136,6 +1207,68 @@ function App() {
             )}
             <p className="network-footnote">
               Traffic rates are calculated from local interface counters. Combined rates exclude loopback; virtual interfaces can overlap with physical-interface counters. Kestrel does not inspect websites, connections, or network contents.
+            </p>
+          </section>
+        ) : (
+          <section className="startup-page" aria-labelledby="startup-page-title">
+            <div className="startup-toolbar">
+              <div>
+                <h2 id="startup-page-title">Applications at sign-in</h2>
+                <p>{startupLoading && startupApps.length === 0 ? "Reading startup entries…" : `${filteredStartupApps.length} of ${startupApps.length} entries`}</p>
+              </div>
+              <div className="startup-toolbar-actions">
+                <label className="startup-search">
+                  <span className="sr-only">Search startup applications</span>
+                  <span aria-hidden="true">⌕</span>
+                  <input
+                    type="search"
+                    value={startupQuery}
+                    onChange={(event) => setStartupQuery(event.target.value)}
+                    placeholder="Search name, command, or source…"
+                  />
+                </label>
+                <button
+                  className="startup-refresh-button"
+                  disabled={startupLoading}
+                  onClick={() => setStartupRefreshKey((key) => key + 1)}
+                >
+                  {startupLoading ? "Reading…" : "Refresh"}
+                </button>
+              </div>
+            </div>
+
+            {startupError ? (
+              <div className="storage-message" role="alert">Could not read startup applications: {startupError}</div>
+            ) : startupLoading && startupApps.length === 0 ? (
+              <div className="storage-message" role="status">Reading local login-application entries…</div>
+            ) : filteredStartupApps.length === 0 ? (
+              <div className="storage-message" role="status">
+                {startupApps.length === 0 ? "No startup applications were found." : "No startup applications match your search."}
+              </div>
+            ) : (
+              <div className="startup-list">
+                {filteredStartupApps.map((startupApp) => (
+                  <article className="startup-entry" key={startupApp.id}>
+                    <div className="startup-entry-icon" aria-hidden="true">◷</div>
+                    <div className="startup-entry-main">
+                      <div className="startup-entry-title">
+                        <h3>{startupApp.name}</h3>
+                        <span className={`startup-state${startupApp.enabled ? " enabled" : " disabled"}`}>
+                          <span className="startup-state-dot" />
+                          {startupApp.enabled ? "Enabled" : "Disabled"}
+                        </span>
+                      </div>
+                      <p className="startup-entry-command">{startupApp.command || "Launch command not provided"}</p>
+                    </div>
+                    <span className={`startup-source${startupApp.source === "User" ? " user" : ""}`}>
+                      {startupApp.source}
+                    </span>
+                  </article>
+                ))}
+              </div>
+            )}
+            <p className="startup-footnote">
+              This read-only list comes from local XDG autostart entries. Enabled status reflects Hidden and X-GNOME-Autostart-enabled settings; desktop-session rules can also affect whether an entry runs. Kestrel does not change startup behavior here.
             </p>
           </section>
         )}

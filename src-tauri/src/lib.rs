@@ -1,3 +1,7 @@
+use std::collections::BTreeMap;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -28,6 +32,16 @@ struct DriveSnapshot {
     total_bytes: u64,
     available_bytes: u64,
     is_removable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupAppSnapshot {
+    id: String,
+    name: String,
+    command: String,
+    source: String,
+    enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -135,6 +149,113 @@ fn get_telemetry(
         memory_used_bytes: system.used_memory(),
         memory_total_bytes: system.total_memory(),
     })
+}
+
+fn parse_desktop_entry(path: &Path, source: &str) -> Result<StartupAppSnapshot, String> {
+    let contents = fs::read_to_string(path)
+        .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+    let mut in_desktop_entry = false;
+    let mut name = None;
+    let mut command = None;
+    let mut hidden = false;
+    let mut gnome_enabled = true;
+
+    for line in contents.lines().map(str::trim) {
+        if line.starts_with('[') && line.ends_with(']') {
+            in_desktop_entry = line == "[Desktop Entry]";
+            continue;
+        }
+        if !in_desktop_entry || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("Name=") {
+            name = Some(value.to_string());
+        } else if let Some(value) = line.strip_prefix("Exec=") {
+            command = Some(value.to_string());
+        } else if let Some(value) = line.strip_prefix("Hidden=") {
+            hidden = value.eq_ignore_ascii_case("true");
+        } else if let Some(value) = line.strip_prefix("X-GNOME-Autostart-enabled=") {
+            gnome_enabled = !value.eq_ignore_ascii_case("false");
+        }
+    }
+
+    let id = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let fallback_name = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Unnamed application")
+        .to_string();
+
+    Ok(StartupAppSnapshot {
+        id,
+        name: name.filter(|name| !name.is_empty()).unwrap_or(fallback_name),
+        command: command.unwrap_or_default(),
+        source: source.to_string(),
+        enabled: !hidden && gnome_enabled,
+    })
+}
+
+fn read_autostart_directory(
+    directory: &Path,
+    source: &str,
+    entries: &mut BTreeMap<String, StartupAppSnapshot>,
+    replace_existing: bool,
+) -> Result<(), String> {
+    if !directory.exists() {
+        return Ok(());
+    }
+    let files = fs::read_dir(directory)
+        .map_err(|error| format!("Could not read {}: {error}", directory.display()))?;
+    for file in files {
+        let file = file.map_err(|error| format!("Could not inspect {}: {error}", directory.display()))?;
+        let path = file.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("desktop") {
+            continue;
+        }
+        let entry = parse_desktop_entry(&path, source)?;
+        if replace_existing || !entries.contains_key(&entry.id) {
+            entries.insert(entry.id.clone(), entry);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_startup_apps() -> Result<Vec<StartupAppSnapshot>, String> {
+    let mut directories = env::var_os("XDG_CONFIG_DIRS")
+        .map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_else(|| vec![PathBuf::from("/etc/xdg")]);
+    directories.reverse();
+
+    let mut entries = BTreeMap::new();
+    for directory in directories {
+        read_autostart_directory(
+            &directory.join("autostart"),
+            "System",
+            &mut entries,
+            true,
+        )?;
+    }
+
+    let user_config = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
+    if let Some(user_config) = user_config {
+        read_autostart_directory(
+            &user_config.join("autostart"),
+            "User",
+            &mut entries,
+            true,
+        )?;
+    }
+
+    let mut applications = entries.into_values().collect::<Vec<_>>();
+    applications.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(applications)
 }
 
 #[tauri::command]
@@ -310,6 +431,7 @@ pub fn run() {
             get_telemetry,
             get_temperatures,
             get_network_interfaces,
+            get_startup_apps,
             get_storage,
             get_partitions,
             get_processes,

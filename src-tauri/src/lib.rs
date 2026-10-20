@@ -19,6 +19,22 @@ struct TelemetrySnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct SystemInfoSnapshot {
+    operating_system: String,
+    kernel_version: Option<String>,
+    host_name: Option<String>,
+    architecture: String,
+    processor: Option<String>,
+    logical_processors: usize,
+    physical_cores: Option<usize>,
+    memory_total_bytes: u64,
+    uptime_seconds: u64,
+    desktop_environment: Option<String>,
+    session_type: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TemperatureSnapshot {
     label: String,
     temperature_celsius: f32,
@@ -167,6 +183,35 @@ fn get_telemetry(
         cpu_usage_percent: system.global_cpu_usage(),
         memory_used_bytes: system.used_memory(),
         memory_total_bytes: system.total_memory(),
+    })
+}
+
+#[tauri::command]
+fn get_system_info(state: tauri::State<'_, TelemetryState>) -> Result<SystemInfoSnapshot, String> {
+    let system = state
+        .0
+        .lock()
+        .map_err(|_| "System information is unavailable".to_string())?;
+    let processor = system
+        .cpus()
+        .first()
+        .map(|cpu| cpu.brand().trim().to_string())
+        .filter(|brand| !brand.is_empty());
+
+    Ok(SystemInfoSnapshot {
+        operating_system: System::long_os_version()
+            .or_else(System::name)
+            .unwrap_or_else(|| "Linux".to_string()),
+        kernel_version: System::kernel_version(),
+        host_name: System::host_name(),
+        architecture: env::consts::ARCH.to_string(),
+        processor,
+        logical_processors: system.cpus().len(),
+        physical_cores: System::physical_core_count(),
+        memory_total_bytes: system.total_memory(),
+        uptime_seconds: System::uptime(),
+        desktop_environment: env::var("XDG_CURRENT_DESKTOP").ok().filter(|value| !value.is_empty()),
+        session_type: env::var("XDG_SESSION_TYPE").ok().filter(|value| !value.is_empty()),
     })
 }
 
@@ -676,6 +721,7 @@ pub fn run() {
         .manage(TelemetryState(Mutex::new(system)))
         .invoke_handler(tauri::generate_handler![
             get_telemetry,
+            get_system_info,
             get_temperatures,
             get_network_interfaces,
             get_startup_apps,

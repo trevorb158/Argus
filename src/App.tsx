@@ -48,6 +48,19 @@ type ServiceSnapshot = {
 
 type ServiceInventory = { services: ServiceSnapshot[]; warnings: string[] };
 type ServiceFilter = "all" | "active" | "failed" | "enabled";
+type SystemInfoSnapshot = {
+  operatingSystem: string;
+  kernelVersion: string | null;
+  hostName: string | null;
+  architecture: string;
+  processor: string | null;
+  logicalProcessors: number;
+  physicalCores: number | null;
+  memoryTotalBytes: number;
+  uptimeSeconds: number;
+  desktopEnvironment: string | null;
+  sessionType: string | null;
+};
 
 type DriveSnapshot = {
   name: string;
@@ -82,7 +95,7 @@ type ProcessSnapshot = {
 
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
 
-type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services";
+type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 
@@ -120,6 +133,21 @@ function formatProcessRuntime(seconds: number) {
   return `${remainingSeconds}s`;
 }
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "Unavailable";
+  const gib = bytes / (1024 ** 3);
+  return `${gib.toFixed(1)} GiB`;
+}
+
+function formatUptime(seconds: number): string {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
 function App() {
   const [page, setPage] = useState<AppPage>("overview");
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot | null>(null);
@@ -153,6 +181,9 @@ function App() {
   const [serviceFilter, setServiceFilter] = useState<ServiceFilter>("all");
   const [serviceVisibleCount, setServiceVisibleCount] = useState(60);
   const [serviceRefreshKey, setServiceRefreshKey] = useState(0);
+  const [systemInfo, setSystemInfo] = useState<SystemInfoSnapshot | null>(null);
+  const [systemInfoError, setSystemInfoError] = useState<string | null>(null);
+  const [systemInfoLoading, setSystemInfoLoading] = useState(false);
   const previousNetworkCounters = useRef<Record<string, {
     receivedBytes: number;
     transmittedBytes: number;
@@ -342,6 +373,30 @@ function App() {
       active = false;
     };
   }, [page, serviceRefreshKey]);
+
+  useEffect(() => {
+    if (page !== "system") return;
+
+    let active = true;
+    setSystemInfoLoading(true);
+    invoke<SystemInfoSnapshot>("get_system_info")
+      .then((snapshot) => {
+        if (active) {
+          setSystemInfo(snapshot);
+          setSystemInfoError(null);
+        }
+      })
+      .catch((error) => {
+        if (active) setSystemInfoError(String(error));
+      })
+      .finally(() => {
+        if (active) setSystemInfoLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [page]);
 
   useEffect(() => {
     if (page !== "startup") return;
@@ -744,6 +799,13 @@ function App() {
           >
             <span>⚙</span> Services
           </button>
+          <button
+            className={`nav-item${page === "system" ? " active" : ""}`}
+            aria-current={page === "system" ? "page" : undefined}
+            onClick={() => setPage("system")}
+          >
+            <span>ⓘ</span> System
+          </button>
           <button className="nav-item upcoming" disabled title="Coming later">
             <span>⚙</span> Settings <small>SOON</small>
           </button>
@@ -778,9 +840,11 @@ function App() {
                       ? "NETWORK INTERFACES"
                       : page === "startup"
                         ? "LOGIN APPLICATIONS"
-                        : "BACKGROUND SERVICES"}
+                        : page === "services"
+                          ? "BACKGROUND SERVICES"
+                          : "DEVICE INFORMATION"}
             </p>
-            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : "Services"}</h1>
+            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : "System"}</h1>
             <p className="subheading">
               {page === "overview"
                 ? "A clear view of your workstation, at a glance."
@@ -792,7 +856,9 @@ function App() {
                       ? "See live traffic and addresses for this device’s network interfaces."
                       : page === "startup"
                         ? "Review applications configured to start when you sign in."
-                        : "Review service activity and its configured startup mode."}
+                        : page === "services"
+                          ? "Review service activity and its configured startup mode."
+                          : "Review operating system, hardware, and desktop session details."}
             </p>
           </div>
           <div className="refresh-state">
@@ -816,9 +882,13 @@ function App() {
                           ? startupError
                             ? "status-dot muted"
                             : "status-dot"
-                          : serviceError
-                            ? "status-dot muted"
-                            : "status-dot"
+                          : page === "services"
+                            ? serviceError
+                              ? "status-dot muted"
+                              : "status-dot"
+                            : systemInfoError
+                              ? "status-dot muted"
+                              : "status-dot"
               }
             />
             {page === "overview"
@@ -845,11 +915,17 @@ function App() {
                           : startupLoading
                             ? "Reading startup entries"
                             : `${startupApps.filter((startupApp) => startupApp.enabled).length} enabled entries`
-                        : serviceError
-                          ? "Service information unavailable"
-                          : serviceLoading
-                            ? "Reading services"
-                            : `${services.length} services`}
+                        : page === "services"
+                          ? serviceError
+                            ? "Service information unavailable"
+                            : serviceLoading
+                              ? "Reading services"
+                              : `${services.length} services`
+                          : systemInfoError
+                            ? "System information unavailable"
+                            : systemInfoLoading
+                              ? "Reading device information"
+                              : systemInfo?.operatingSystem ?? "System information unavailable"}
           </div>
         </section>
 
@@ -1418,7 +1494,7 @@ function App() {
               This list comes from local XDG autostart entries. You can enable or disable user entries with a launch command; system-managed entries stay read-only. Changes apply at the next sign-in. Desktop-session rules can also affect whether an entry runs.
             </p>
           </section>
-        ) : (
+        ) : page === "services" ? (
           <section className="services-page" aria-labelledby="services-page-title">
             <div className="services-toolbar">
               <div>
@@ -1505,6 +1581,54 @@ function App() {
             <p className="service-footnote">
               Service status and startup modes come from the systemd system and user managers. This page is read-only; Kestrel will use a separate, permission-aware flow before offering service controls.
             </p>
+          </section>
+        ) : (
+          <section className="system-info-page" aria-labelledby="system-info-page-title">
+            <div className="system-info-heading">
+              <div>
+                <h2 id="system-info-page-title">This device</h2>
+                <p>Information read locally from Linux and the current desktop session.</p>
+              </div>
+            </div>
+            {systemInfoError ? (
+              <div className="storage-message" role="alert">Could not read system information: {systemInfoError}</div>
+            ) : !systemInfo ? (
+              <div className="storage-message" role="status">Reading device information…</div>
+            ) : (
+              <div className="system-info-grid">
+                <article className="system-info-card featured">
+                  <span className="system-info-label">OPERATING SYSTEM</span>
+                  <strong>{systemInfo.operatingSystem}</strong>
+                  <small>{systemInfo.kernelVersion ? `Kernel ${systemInfo.kernelVersion}` : "Kernel version unavailable"}</small>
+                </article>
+                <article className="system-info-card">
+                  <span className="system-info-label">PROCESSOR</span>
+                  <strong>{systemInfo.processor ?? "Unavailable"}</strong>
+                  <small>{systemInfo.logicalProcessors} logical processors{systemInfo.physicalCores ? ` · ${systemInfo.physicalCores} physical cores` : ""}</small>
+                </article>
+                <article className="system-info-card">
+                  <span className="system-info-label">MEMORY</span>
+                  <strong>{formatBytes(systemInfo.memoryTotalBytes)}</strong>
+                  <small>Total installed memory reported by Linux</small>
+                </article>
+                <article className="system-info-card">
+                  <span className="system-info-label">DEVICE</span>
+                  <strong>{systemInfo.hostName ?? "Unavailable"}</strong>
+                  <small>{systemInfo.architecture} architecture</small>
+                </article>
+                <article className="system-info-card">
+                  <span className="system-info-label">DESKTOP SESSION</span>
+                  <strong>{systemInfo.desktopEnvironment ?? "Unavailable"}</strong>
+                  <small>{systemInfo.sessionType ? `${systemInfo.sessionType} session` : "Session type unavailable"}</small>
+                </article>
+                <article className="system-info-card">
+                  <span className="system-info-label">UPTIME</span>
+                  <strong>{formatUptime(systemInfo.uptimeSeconds)}</strong>
+                  <small>Time since this system started</small>
+                </article>
+              </div>
+            )}
+            <p className="service-footnote">These details stay on this device. Some values depend on what the kernel and desktop environment make available.</p>
           </section>
         )}
       </main>

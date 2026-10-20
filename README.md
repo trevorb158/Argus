@@ -4,7 +4,7 @@ Kestrel is a local-first Linux workstation utility built with Tauri 2, React, Ty
 
 ## Current prototype
 
-The current prototype provides live CPU and memory readings, a bounded in-memory performance chart with 5, 15, and 30 minute views, mounted-volume usage, and a read-only Processes page with live CPU and memory values, search, and sorting. Process data is read only while that page is open. Temperature remains a placeholder; Storage and Settings do not yet have dedicated pages. See [Kestrel Project Blueprint](Kestrel_Project_Blueprint.docx) for product direction, architecture, safety principles, current limitations, and roadmap.
+The current prototype provides live CPU and memory readings, a bounded in-memory performance chart with 5, 15, and 30 minute views, an Overview storage panel, a dedicated mounted-volume page with search and capacity details, and a read-only Processes page with live CPU/memory values, search, and sorting. Storage data refreshes every five seconds; process data refreshes only while its page is open. Temperature remains a placeholder, and Settings does not yet have a dedicated page. See [Kestrel Project Blueprint](Kestrel_Project_Blueprint.docx) for product direction, architecture, safety principles, current limitations, and roadmap.
 
 ## Run on Linux
 

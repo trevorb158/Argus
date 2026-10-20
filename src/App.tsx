@@ -24,7 +24,7 @@ type ProcessSnapshot = {
   memoryBytes: number;
 };
 
-type AppPage = "overview" | "processes";
+type AppPage = "overview" | "processes" | "storage";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 
@@ -53,6 +53,7 @@ function App() {
   const [historyWindow, setHistoryWindow] = useState(300);
   const [drives, setDrives] = useState<DriveSnapshot[]>([]);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [driveQuery, setDriveQuery] = useState("");
   const [processes, setProcesses] = useState<ProcessSnapshot[]>([]);
   const [processError, setProcessError] = useState<string | null>(null);
   const [processLoading, setProcessLoading] = useState(false);
@@ -220,6 +221,18 @@ function App() {
     historyWindow === 300 ? "5 minutes" : historyWindow === 900 ? "15 minutes" : "30 minutes";
   const sampleProgress = Math.min(history.length, historyWindow);
 
+  const filteredDrives = drives
+    .filter((drive) => {
+      const query = driveQuery.trim().toLocaleLowerCase();
+      return (
+        !query ||
+        drive.name.toLocaleLowerCase().includes(query) ||
+        drive.mountPoint.toLocaleLowerCase().includes(query) ||
+        drive.fileSystem.toLocaleLowerCase().includes(query)
+      );
+    })
+    .sort((a, b) => a.mountPoint.localeCompare(b.mountPoint));
+
   const filteredProcesses = processes
     .filter((process) => {
       const query = processQuery.trim().toLocaleLowerCase();
@@ -285,8 +298,12 @@ function App() {
           >
             <span>◫</span> Overview
           </button>
-          <button className="nav-item upcoming" disabled title="Coming later">
-            <span>▤</span> Storage <small>SOON</small>
+          <button
+            className={`nav-item${page === "storage" ? " active" : ""}`}
+            aria-current={page === "storage" ? "page" : undefined}
+            onClick={() => setPage("storage")}
+          >
+            <span>▤</span> Storage
           </button>
           <button
             className={`nav-item${page === "processes" ? " active" : ""}`}
@@ -319,24 +336,46 @@ function App() {
         <section className="page-heading">
           <div>
             <p className="eyebrow">
-              {page === "overview" ? "SYSTEM DASHBOARD" : "RUNNING APPLICATIONS AND SERVICES"}
+              {page === "overview"
+                ? "SYSTEM DASHBOARD"
+                : page === "processes"
+                  ? "RUNNING APPLICATIONS AND SERVICES"
+                  : "DISKS AND VOLUMES"}
             </p>
-            <h1>{page === "overview" ? "Overview" : "Processes"}</h1>
+            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : "Storage"}</h1>
             <p className="subheading">
               {page === "overview"
                 ? "A clear view of your workstation, at a glance."
-                : "See which programs are using your system resources."}
+                : page === "processes"
+                  ? "See which programs are using your system resources."
+                  : "Review mounted volumes and how their space is being used."}
             </p>
           </div>
           <div className="refresh-state">
-            <span className={page === "overview" ? statusClass : processError ? "status-dot muted" : "status-dot"} />
+            <span
+              className={
+                page === "overview"
+                  ? statusClass
+                  : page === "processes"
+                    ? processError
+                      ? "status-dot muted"
+                      : "status-dot"
+                    : storageError
+                      ? "status-dot muted"
+                      : "status-dot"
+              }
+            />
             {page === "overview"
               ? statusText
-              : processError
-                ? "Process list unavailable"
-                : processLoading
-                  ? "Reading processes"
-                  : `${processes.length} processes`}
+              : page === "processes"
+                ? processError
+                  ? "Process list unavailable"
+                  : processLoading
+                    ? "Reading processes"
+                    : `${processes.length} processes`
+                : storageError
+                  ? "Storage unavailable"
+                  : `${drives.length} mounted volumes`}
           </div>
         </section>
 
@@ -512,7 +551,7 @@ function App() {
               : "Connecting to the local telemetry service..."}
         </footer>
           </>
-        ) : (
+        ) : page === "processes" ? (
           <section className="process-page" aria-labelledby="process-list-title">
             <div className="process-toolbar">
               <div>
@@ -579,6 +618,91 @@ function App() {
             )}
             <p className="process-footnote">
               Process information is read-only. Some system processes may show limited details due to operating-system permissions.
+            </p>
+          </section>
+        ) : (
+          <section className="storage-page" aria-labelledby="storage-page-title">
+            <div className="storage-page-toolbar">
+              <div>
+                <h2 id="storage-page-title">Mounted volumes</h2>
+                <p>{filteredDrives.length} of {drives.length} volumes · refreshes every 5 seconds</p>
+              </div>
+              <label className="volume-search">
+                <span className="sr-only">Search volumes</span>
+                <span aria-hidden="true">⌕</span>
+                <input
+                  type="search"
+                  value={driveQuery}
+                  onChange={(event) => setDriveQuery(event.target.value)}
+                  placeholder="Search name, mount point, or filesystem…"
+                />
+              </label>
+            </div>
+
+            {storageError ? (
+              <div className="storage-message" role="alert">
+                Could not read mounted volumes: {storageError}
+              </div>
+            ) : drives.length === 0 ? (
+              <div className="storage-message" role="status">
+                Looking for mounted volumes…
+              </div>
+            ) : filteredDrives.length === 0 ? (
+              <div className="storage-message" role="status">
+                No mounted volumes match your search.
+              </div>
+            ) : (
+              <div className="volume-grid">
+                {filteredDrives.map((drive) => {
+                  const usedBytes = Math.max(0, drive.totalBytes - drive.availableBytes);
+                  const usedPercent =
+                    drive.totalBytes > 0
+                      ? Math.min(100, Math.round((usedBytes / drive.totalBytes) * 100))
+                      : 0;
+                  const driveName = drive.name.trim() || drive.mountPoint || "Storage volume";
+
+                  return (
+                    <article className="volume-card" key={drive.mountPoint}>
+                      <div className="volume-card-heading">
+                        <div className="drive-icon">▰</div>
+                        <div className="volume-name">
+                          <h3>{driveName}</h3>
+                          <p>{drive.mountPoint}</p>
+                        </div>
+                        <span className="volume-state">
+                          {drive.mountPoint === "/" ? "System" : drive.isRemovable ? "Removable" : "Mounted"}
+                        </span>
+                      </div>
+                      <div className="volume-details">
+                        <span>{drive.fileSystem || "Filesystem unknown"}</span>
+                        {drive.isRemovable && <span>Removable device</span>}
+                      </div>
+                      <div className="volume-usage-labels">
+                        <span>Space used</span>
+                        <strong>{usedPercent}%</strong>
+                      </div>
+                      <div
+                        className="drive-track volume-track"
+                        role="progressbar"
+                        aria-label={`Space used on ${drive.mountPoint}`}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={usedPercent}
+                      >
+                        <span className="drive-fill" style={{ width: `${usedPercent}%` }} />
+                      </div>
+                      <div className="volume-capacity-grid">
+                        <div><span>Used</span><strong>{formatGiB(usedBytes)} GiB</strong></div>
+                        <div><span>Free</span><strong>{formatGiB(drive.availableBytes)} GiB</strong></div>
+                        <div><span>Total</span><strong>{formatGiB(drive.totalBytes)} GiB</strong></div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+            <p className="storage-footnote">
+              Kestrel currently lists volumes that Linux reports as mounted. Unmounted partitions do not have usable-space readings here; mount them with your desktop’s disk utility to see their capacity. Kestrel does not mount or repair drives.
             </p>
           </section>
         )}

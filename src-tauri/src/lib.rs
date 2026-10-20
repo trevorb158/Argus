@@ -280,6 +280,8 @@ struct ProcessSnapshot {
     run_time_seconds: u64,
     cpu_usage_percent: f32,
     memory_bytes: u64,
+    disk_read_total_bytes: u64,
+    disk_write_total_bytes: u64,
 }
 
 struct TelemetryState(Mutex<System>);
@@ -1310,6 +1312,7 @@ fn get_processes(
         ProcessRefreshKind::nothing()
             .with_cpu()
             .with_memory()
+            .with_disk_usage()
             .without_tasks(),
     );
 
@@ -1325,6 +1328,8 @@ fn get_processes(
             run_time_seconds: process.run_time(),
             cpu_usage_percent: process.cpu_usage(),
             memory_bytes: process.memory(),
+            disk_read_total_bytes: process.disk_usage().total_read_bytes,
+            disk_write_total_bytes: process.disk_usage().total_written_bytes,
         })
         .collect())
 }

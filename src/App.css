@@ -1623,6 +1623,7 @@ h1 {
 
 .process-table {
   width: 100%;
+  min-width: 970px;
   border-collapse: collapse;
   text-align: left;
   font-size: 11px;
@@ -1727,7 +1728,7 @@ h1 {
 }
 
 .process-number {
-  width: 17%;
+  width: 13%;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }

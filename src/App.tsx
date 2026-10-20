@@ -151,13 +151,18 @@ type ProcessSnapshot = {
   runTimeSeconds: number;
   cpuUsagePercent: number;
   memoryBytes: number;
+  diskReadTotalBytes: number;
+  diskWriteTotalBytes: number;
+  diskReadBytesPerSecond: number | null;
+  diskWriteBytesPerSecond: number | null;
 };
+type RawProcessSnapshot = Omit<ProcessSnapshot, "diskReadBytesPerSecond" | "diskWriteBytesPerSecond">;
 
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
 type TemperatureUnit = "celsius" | "fahrenheit";
 
 type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "logs" | "maintenance" | "settings" | "performance" | "sensors";
-type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
+type ProcessSortKey = "name" | "pid" | "cpu" | "memory" | "read" | "write";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 type ProcessStateFilter = "all" | "running" | "sleeping" | "stopped" | "zombie";
 type ProcessViewMode = "list" | "tree";
@@ -322,6 +327,7 @@ function App() {
   const [selectedProcessPid, setSelectedProcessPid] = useState<number | null>(null);
   const [processActionStatus, setProcessActionStatus] =
     useState<ProcessActionStatus | null>(null);
+  const previousProcessIoCounters = useRef<Record<string, { read: number; write: number; time: number }>>({});
 
   useEffect(() => {
     try {
@@ -671,12 +677,29 @@ function App() {
 
     let active = true;
     let timeoutId = 0;
+    previousProcessIoCounters.current = {};
     setProcessLoading(true);
 
     async function refreshProcesses() {
       try {
-        const snapshot = await invoke<ProcessSnapshot[]>("get_processes");
+        const rawSnapshot = await invoke<RawProcessSnapshot[]>("get_processes");
         if (active) {
+          const sampleTime = performance.now();
+          const nextCounters: Record<string, { read: number; write: number; time: number }> = {};
+          const snapshot: ProcessSnapshot[] = rawSnapshot.map((process) => {
+            const key = `${process.pid}:${process.startTime}`;
+            const previous = previousProcessIoCounters.current[key];
+            const elapsedSeconds = previous ? Math.max((sampleTime - previous.time) / 1000, 0.001) : 0;
+            const diskReadBytesPerSecond = previous && process.diskReadTotalBytes >= previous.read
+              ? Math.round((process.diskReadTotalBytes - previous.read) / elapsedSeconds)
+              : null;
+            const diskWriteBytesPerSecond = previous && process.diskWriteTotalBytes >= previous.write
+              ? Math.round((process.diskWriteTotalBytes - previous.write) / elapsedSeconds)
+              : null;
+            nextCounters[key] = { read: process.diskReadTotalBytes, write: process.diskWriteTotalBytes, time: sampleTime };
+            return { ...process, diskReadBytesPerSecond, diskWriteBytesPerSecond };
+          });
+          previousProcessIoCounters.current = nextCounters;
           setProcesses(snapshot);
           setProcessError(null);
         }
@@ -867,6 +890,12 @@ function App() {
           break;
         case "memory":
           comparison = a.memoryBytes - b.memoryBytes;
+          break;
+        case "read":
+          comparison = (a.diskReadBytesPerSecond ?? -1) - (b.diskReadBytesPerSecond ?? -1);
+          break;
+        case "write":
+          comparison = (a.diskWriteBytesPerSecond ?? -1) - (b.diskWriteBytesPerSecond ?? -1);
           break;
       }
       return processSort.direction === "asc" ? comparison : -comparison;
@@ -1699,6 +1728,12 @@ function App() {
                       <th aria-sort={processSort.key === "memory" ? `${processSort.direction}ending` : "none"}>
                         <button onClick={() => sortProcesses("memory")}>Memory / RAM <span>↕</span></button>
                       </th>
+                      <th aria-sort={processSort.key === "read" ? `${processSort.direction}ending` : "none"}>
+                        <button onClick={() => sortProcesses("read")}>Disk read <span>↕</span></button>
+                      </th>
+                      <th aria-sort={processSort.key === "write" ? `${processSort.direction}ending` : "none"}>
+                        <button onClick={() => sortProcesses("write")}>Disk write <span>↕</span></button>
+                      </th>
                       <th className="process-action-heading">Action</th>
                     </tr>
                   </thead>
@@ -1736,6 +1771,16 @@ function App() {
                               : "RAM share unavailable"}
                           </small>
                         </td>
+                        <td className="process-number process-io-cell">
+                          {process.diskReadBytesPerSecond === null
+                            ? process.diskReadTotalBytes > 0 ? "Measuring…" : "—"
+                            : formatNetworkRate(process.diskReadBytesPerSecond)}
+                        </td>
+                        <td className="process-number process-io-cell">
+                          {process.diskWriteBytesPerSecond === null
+                            ? process.diskWriteTotalBytes > 0 ? "Measuring…" : "—"
+                            : formatNetworkRate(process.diskWriteBytesPerSecond)}
+                        </td>
                         <td className="process-action-cell">
                           <div className="process-row-actions">
                           <button
@@ -1761,11 +1806,13 @@ function App() {
                       </tr>
                       {selectedProcessPid === process.pid && (
                         <tr id={`process-details-${process.pid}`} className="process-details-row">
-                          <td className="process-details-cell" colSpan={5}>
+                          <td className="process-details-cell" colSpan={7}>
                             <dl className="process-details">
                               <div><dt>State</dt><dd>{process.status}</dd></div>
                               <div><dt>Parent PID</dt><dd>{process.parentPid ?? "Unavailable"}</dd></div>
                               <div><dt>Running for</dt><dd>{formatProcessRuntime(process.runTimeSeconds)}</dd></div>
+                              <div><dt>Total disk read</dt><dd>{process.diskReadTotalBytes > 0 ? formatProcessMemory(process.diskReadTotalBytes) : "Not reported"}</dd></div>
+                              <div><dt>Total disk write</dt><dd>{process.diskWriteTotalBytes > 0 ? formatProcessMemory(process.diskWriteTotalBytes) : "Not reported"}</dd></div>
                             </dl>
                           </td>
                         </tr>
@@ -1777,7 +1824,7 @@ function App() {
               </div>
             )}
             <p className="process-footnote">
-              Ending a process requests normal termination. Unsaved work may be lost, and protected system processes may reject the request. Kestrel will not force-stop a process.
+              Per-process disk rates compare successive Linux I/O counters; protected processes may not report them. Ending a process requests normal termination. Unsaved work may be lost, and protected system processes may reject the request. Kestrel will not force-stop a process.
             </p>
           </section>
         ) : page === "storage" ? (

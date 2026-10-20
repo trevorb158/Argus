@@ -1832,12 +1832,12 @@ h1 {
 }
 
 .process-action-heading {
-  width: 150px;
+  width: 220px;
   text-align: center !important;
 }
 
 .process-action-cell {
-  width: 150px;
+  width: 220px;
   text-align: center;
 }
 
@@ -1913,6 +1913,27 @@ h1 {
 }
 
 .process-end-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.process-force-button {
+  padding: 6px 8px;
+  border: 1px solid #594832;
+  border-radius: 6px;
+  background: #261f17;
+  color: #e2bf87;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.process-force-button:hover:not(:disabled) {
+  border-color: #94704a;
+  background: #35291b;
+  color: #f3d5a2;
+}
+
+.process-force-button:disabled {
   opacity: 0.6;
   cursor: wait;
 }

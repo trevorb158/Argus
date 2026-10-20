@@ -1334,20 +1334,20 @@ fn get_processes(
         .collect())
 }
 
-#[tauri::command]
-fn terminate_process(
+fn send_process_signal(
     state: tauri::State<'_, TelemetryState>,
     pid: u32,
     expected_name: String,
     expected_start_time: u64,
+    signal: Signal,
 ) -> Result<(), String> {
     if pid == 1 {
-        return Err("Kestrel will not terminate the system's init process.".to_string());
+        return Err("Kestrel will not signal the system's init process.".to_string());
     }
 
     let target_pid = Pid::from_u32(pid);
     if sysinfo::get_current_pid().is_ok_and(|current_pid| current_pid == target_pid) {
-        return Err("Kestrel will not terminate itself.".to_string());
+        return Err("Kestrel will not signal itself.".to_string());
     }
 
     let mut system = state
@@ -1370,11 +1370,31 @@ fn terminate_process(
         return Err("The process changed since the list was refreshed. Review the updated list and try again.".to_string());
     }
 
-    match process.kill_with(Signal::Term) {
+    match process.kill_with(signal) {
         Some(true) => Ok(()),
-        Some(false) => Err("Linux did not allow Kestrel to send the termination request. The process may require higher privileges.".to_string()),
-        None => Err("Normal termination is not supported on this system.".to_string()),
+        Some(false) => Err("Linux did not allow Kestrel to signal this process. It may require higher privileges.".to_string()),
+        None => Err("Process signaling is not supported on this system.".to_string()),
     }
+}
+
+#[tauri::command]
+fn terminate_process(
+    state: tauri::State<'_, TelemetryState>,
+    pid: u32,
+    expected_name: String,
+    expected_start_time: u64,
+) -> Result<(), String> {
+    send_process_signal(state, pid, expected_name, expected_start_time, Signal::Term)
+}
+
+#[tauri::command]
+fn force_stop_process(
+    state: tauri::State<'_, TelemetryState>,
+    pid: u32,
+    expected_name: String,
+    expected_start_time: u64,
+) -> Result<(), String> {
+    send_process_signal(state, pid, expected_name, expected_start_time, Signal::Kill)
 }
 
 #[tauri::command]
@@ -1542,7 +1562,8 @@ pub fn run() {
             clear_cache_entry,
             get_log_inventory,
             get_recent_logs,
-            terminate_process
+            terminate_process,
+            force_stop_process
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

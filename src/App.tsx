@@ -1048,6 +1048,30 @@ function App() {
     }
   }
 
+  async function requestProcessForceStop(process: ProcessSnapshot) {
+    if (terminatingPid !== null) return;
+    const name = process.name || "Unnamed process";
+    const confirmed = window.confirm(
+      `Force stop ${name} (PID ${process.pid})?\n\nThis sends an immediate kill signal. The app cannot save work or clean up, and unsaved data may be lost. Use this only if normal End did not work.`,
+    );
+    if (!confirmed) return;
+
+    setTerminatingPid(process.pid);
+    setProcessActionStatus(null);
+    try {
+      await invoke("force_stop_process", {
+        pid: process.pid,
+        expectedName: process.name,
+        expectedStartTime: process.startTime,
+      });
+      setProcessActionStatus({ kind: "success", message: `Force-stop signal sent to ${name} (PID ${process.pid}).` });
+    } catch (error) {
+      setProcessActionStatus({ kind: "error", message: `Could not force stop ${name} (PID ${process.pid}): ${String(error)}` });
+    } finally {
+      setTerminatingPid(null);
+    }
+  }
+
   const statusText = telemetryError
     ? "Telemetry unavailable"
     : telemetry
@@ -1825,10 +1849,18 @@ function App() {
                           <button
                             className="process-end-button"
                             onClick={() => void requestProcessEnd(process)}
-                            disabled={terminatingPid === process.pid}
+                            disabled={terminatingPid !== null}
                             aria-label={`End ${process.name || "unnamed process"}, PID ${process.pid}`}
                           >
                             {terminatingPid === process.pid ? "Sending…" : "End"}
+                          </button>
+                          <button
+                            className="process-force-button"
+                            onClick={() => void requestProcessForceStop(process)}
+                            disabled={terminatingPid !== null}
+                            aria-label={`Force stop ${process.name || "unnamed process"}, PID ${process.pid}`}
+                          >
+                            {terminatingPid === process.pid ? "Sending…" : "Force stop"}
                           </button>
                           </div>
                         </td>

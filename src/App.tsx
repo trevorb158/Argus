@@ -35,6 +35,8 @@ type StartupAppSnapshot = {
   enabled: boolean;
 };
 
+type StartupActionStatus = { kind: "success" | "error"; message: string };
+
 type DriveSnapshot = {
   name: string;
   mountPoint: string;
@@ -128,6 +130,9 @@ function App() {
   const [startupLoading, setStartupLoading] = useState(false);
   const [startupQuery, setStartupQuery] = useState("");
   const [startupRefreshKey, setStartupRefreshKey] = useState(0);
+  const [startupActionId, setStartupActionId] = useState<string | null>(null);
+  const [startupActionStatus, setStartupActionStatus] =
+    useState<StartupActionStatus | null>(null);
   const previousNetworkCounters = useRef<Record<string, {
     receivedBytes: number;
     transmittedBytes: number;
@@ -549,6 +554,38 @@ function App() {
       direction:
         current.key === key && current.direction === "desc" ? "asc" : "desc",
     }));
+  }
+
+  async function requestStartupToggle(startupApp: StartupAppSnapshot) {
+    if (startupApp.source !== "User" || !startupApp.command.trim()) return;
+    const enabled = !startupApp.enabled;
+    const action = enabled ? "enable" : "disable";
+    const confirmed = window.confirm(
+      `${enabled ? "Enable" : "Disable"} ${startupApp.name} at sign-in?\n\nThis changes only your account’s startup entry. It takes effect the next time you sign in and will not start or close the app now.`,
+    );
+    if (!confirmed) return;
+
+    setStartupActionId(startupApp.id);
+    setStartupActionStatus(null);
+    try {
+      const updated = await invoke<StartupAppSnapshot>("set_startup_enabled", {
+        id: startupApp.id,
+        enabled,
+        expectedEnabled: startupApp.enabled,
+      });
+      setStartupApps((current) => current.map((entry) => entry.id === updated.id ? updated : entry));
+      setStartupActionStatus({
+        kind: "success",
+        message: `${startupApp.name} will ${action} at your next sign-in.`,
+      });
+    } catch (error) {
+      setStartupActionStatus({
+        kind: "error",
+        message: `Could not ${action} ${startupApp.name}: ${String(error)}`,
+      });
+    } finally {
+      setStartupActionId(null);
+    }
   }
 
   async function requestProcessEnd(process: ProcessSnapshot) {
@@ -1237,6 +1274,15 @@ function App() {
               </div>
             </div>
 
+            {startupActionStatus && (
+              <div
+                className={`process-action-message ${startupActionStatus.kind}`}
+                role={startupActionStatus.kind === "error" ? "alert" : "status"}
+              >
+                {startupActionStatus.message}
+              </div>
+            )}
+
             {startupError ? (
               <div className="storage-message" role="alert">Could not read startup applications: {startupError}</div>
             ) : startupLoading && startupApps.length === 0 ? (
@@ -1260,15 +1306,32 @@ function App() {
                       </div>
                       <p className="startup-entry-command">{startupApp.command || "Launch command not provided"}</p>
                     </div>
-                    <span className={`startup-source${startupApp.source === "User" ? " user" : ""}`}>
-                      {startupApp.source}
-                    </span>
+                    <div className="startup-entry-actions">
+                      <span className={`startup-source${startupApp.source === "User" ? " user" : ""}`}>
+                        {startupApp.source}
+                      </span>
+                      {startupApp.source === "User" && startupApp.command.trim() ? (
+                        <button
+                          className="startup-toggle-button"
+                          disabled={startupActionId !== null}
+                          onClick={() => void requestStartupToggle(startupApp)}
+                        >
+                          {startupActionId === startupApp.id
+                            ? "Saving…"
+                            : startupApp.enabled ? "Disable" : "Enable"}
+                        </button>
+                      ) : (
+                        <span className="startup-managed-label">
+                          {startupApp.source === "System" ? "System-managed" : "No launch command"}
+                        </span>
+                      )}
+                    </div>
                   </article>
                 ))}
               </div>
             )}
             <p className="startup-footnote">
-              This read-only list comes from local XDG autostart entries. Enabled status reflects Hidden and X-GNOME-Autostart-enabled settings; desktop-session rules can also affect whether an entry runs. Kestrel does not change startup behavior here.
+This list comes from local XDG autostart entries. You can enable or disable user entries with a launch command; system-managed entries stay read-only. Changes apply at the next sign-in. Desktop-session rules can also affect whether an entry runs.
             </p>
           </section>
         )}

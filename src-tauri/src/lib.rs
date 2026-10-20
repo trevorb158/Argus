@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -224,6 +225,130 @@ fn read_autostart_directory(
     Ok(())
 }
 
+fn user_config_directory() -> Option<PathBuf> {
+    env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+}
+
+fn update_desktop_entry(contents: &str, enabled: bool) -> Result<String, String> {
+    let mut lines = Vec::new();
+    let mut in_desktop_entry = false;
+    let mut found_desktop_entry = false;
+    let mut has_hidden = false;
+    let mut has_gnome_enabled = false;
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if in_desktop_entry {
+                if !has_hidden {
+                    lines.push(format!("Hidden={}", if enabled { "false" } else { "true" }));
+                }
+                if !has_gnome_enabled {
+                    lines.push(format!("X-GNOME-Autostart-enabled={}", if enabled { "true" } else { "false" }));
+                }
+            }
+            in_desktop_entry = trimmed == "[Desktop Entry]";
+            found_desktop_entry |= in_desktop_entry;
+            lines.push(line.to_string());
+            continue;
+        }
+
+        if in_desktop_entry {
+            if trimmed.starts_with("Hidden=") {
+                lines.push(format!("Hidden={}", if enabled { "false" } else { "true" }));
+                has_hidden = true;
+                continue;
+            }
+            if trimmed.starts_with("X-GNOME-Autostart-enabled=") {
+                lines.push(format!("X-GNOME-Autostart-enabled={}", if enabled { "true" } else { "false" }));
+                has_gnome_enabled = true;
+                continue;
+            }
+        }
+        lines.push(line.to_string());
+    }
+
+    if in_desktop_entry {
+        if !has_hidden {
+            lines.push(format!("Hidden={}", if enabled { "false" } else { "true" }));
+        }
+        if !has_gnome_enabled {
+            lines.push(format!("X-GNOME-Autostart-enabled={}", if enabled { "true" } else { "false" }));
+        }
+    }
+    if !found_desktop_entry {
+        return Err("The startup file has no [Desktop Entry] section.".to_string());
+    }
+
+    let mut updated = lines.join("\n");
+    if contents.ends_with('\n') {
+        updated.push('\n');
+    }
+    Ok(updated)
+}
+
+#[tauri::command]
+fn set_startup_enabled(
+    id: String,
+    enabled: bool,
+    expected_enabled: bool,
+) -> Result<StartupAppSnapshot, String> {
+    let file_name = Path::new(&id).file_name().and_then(|name| name.to_str());
+    if file_name != Some(id.as_str()) || Path::new(&id).extension().and_then(|ext| ext.to_str()) != Some("desktop") {
+        return Err("Invalid startup entry identifier.".to_string());
+    }
+
+    let directory = user_config_directory()
+        .ok_or_else(|| "Your user configuration directory is unavailable.".to_string())?
+        .join("autostart");
+    let path = directory.join(&id);
+    let current = parse_desktop_entry(&path, "User")?;
+    if current.enabled != expected_enabled {
+        return Err("This startup entry changed since the list was loaded. Refresh and try again.".to_string());
+    }
+    if current.enabled == enabled {
+        return Ok(current);
+    }
+    if current.command.trim().is_empty() {
+        return Err("This entry has no launch command, so Kestrel cannot safely change it.".to_string());
+    }
+
+    let contents = fs::read_to_string(&path)
+        .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+    let updated_contents = update_desktop_entry(&contents, enabled)?;
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
+    let temporary_path = directory.join(format!(".{id}.kestrel-{}.tmp", std::process::id()));
+
+    let write_result = (|| -> Result<(), String> {
+        let mut temporary_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
+            .map_err(|error| format!("Could not create a temporary startup file: {error}"))?;
+        temporary_file
+            .write_all(updated_contents.as_bytes())
+            .map_err(|error| format!("Could not write the startup change: {error}"))?;
+        temporary_file
+            .sync_all()
+            .map_err(|error| format!("Could not save the startup change: {error}"))?;
+        drop(temporary_file);
+        fs::set_permissions(&temporary_path, metadata.permissions())
+            .map_err(|error| format!("Could not preserve startup file permissions: {error}"))?;
+        fs::rename(&temporary_path, &path)
+            .map_err(|error| format!("Could not apply the startup change: {error}"))?;
+        Ok(())
+    })();
+
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    write_result?;
+    parse_desktop_entry(&path, "User")
+}
+
 #[tauri::command]
 fn get_startup_apps() -> Result<Vec<StartupAppSnapshot>, String> {
     let mut directories = env::var_os("XDG_CONFIG_DIRS")
@@ -432,6 +557,7 @@ pub fn run() {
             get_temperatures,
             get_network_interfaces,
             get_startup_apps,
+            set_startup_enabled,
             get_storage,
             get_partitions,
             get_processes,

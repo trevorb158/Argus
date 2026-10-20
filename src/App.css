@@ -1052,6 +1052,39 @@ h1 {
   background: currentColor;
 }
 
+.startup-entry-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.startup-toggle-button {
+  padding: 6px 9px;
+  border: 1px solid #354151;
+  border-radius: 6px;
+  background: #171e27;
+  color: #c1ccd8;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.startup-toggle-button:hover:not(:disabled) {
+  border-color: #496257;
+  color: #c6f5e4;
+}
+
+.startup-toggle-button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.startup-managed-label {
+  color: #788593;
+  font-size: 9px;
+}
+
 .startup-source.user {
   border-color: #343b4b;
   background: #1b202a;

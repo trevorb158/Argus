@@ -123,6 +123,18 @@ type DriveSnapshot = {
   isRemovable: boolean;
 };
 
+type DriveHealthSnapshot = {
+  path: string;
+  model: string;
+  smartSupported: boolean | null;
+  healthState: "healthy" | "warning" | "unsupported" | "unknown";
+  temperatureCelsius: number | null;
+  powerOnHours: number | null;
+  badSectors: number | null;
+  attributesFailing: number | null;
+  smartUpdatedUnixSeconds: number | null;
+};
+
 type PartitionSnapshot = {
   name: string;
   path: string;
@@ -256,6 +268,10 @@ function App() {
   const [performanceLoading, setPerformanceLoading] = useState(false);
   const [drives, setDrives] = useState<DriveSnapshot[]>([]);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [driveHealth, setDriveHealth] = useState<DriveHealthSnapshot[]>([]);
+  const [driveHealthError, setDriveHealthError] = useState<string | null>(null);
+  const [driveHealthLoading, setDriveHealthLoading] = useState(false);
+  const [driveHealthRefreshKey, setDriveHealthRefreshKey] = useState(0);
   const [partitions, setPartitions] = useState<PartitionSnapshot[]>([]);
   const [partitionError, setPartitionError] = useState<string | null>(null);
   const [partitionLoading, setPartitionLoading] = useState(false);
@@ -485,6 +501,37 @@ function App() {
       window.clearTimeout(timeoutId);
     };
   }, [page, partitionRefreshKey]);
+
+  useEffect(() => {
+    if (page !== "storage") return;
+
+    let active = true;
+    let timeoutId = 0;
+    setDriveHealthLoading(true);
+
+    async function refreshDriveHealth() {
+      try {
+        const snapshot = await invoke<DriveHealthSnapshot[]>("get_drive_health");
+        if (active) {
+          setDriveHealth(snapshot);
+          setDriveHealthError(null);
+        }
+      } catch (error) {
+        if (active) setDriveHealthError(String(error));
+      } finally {
+        if (active) {
+          setDriveHealthLoading(false);
+          timeoutId = window.setTimeout(() => void refreshDriveHealth(), 60000);
+        }
+      }
+    }
+
+    void refreshDriveHealth();
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [page, driveHealthRefreshKey]);
 
   useEffect(() => {
     if (page !== "performance") return;
@@ -1915,7 +1962,7 @@ function App() {
               </div>
             )}
             <p className="process-footnote">
-              Per-process disk rates compare successive Linux I/O counters; protected processes may not report them. Ending a process requests normal termination. Unsaved work may be lost, and protected system processes may reject the request. Kestrel will not force-stop a process.
+              Per-process disk rates compare successive Linux I/O counters; protected processes may not report them. Ending a process requests normal termination. Unsaved work may be lost, and protected system processes may reject the request. Force stop sends an immediate kill signal after a separate confirmation, so unsaved work may be lost.
             </p>
           </section>
         ) : page === "storage" ? (
@@ -1999,6 +2046,54 @@ function App() {
                 })}
               </div>
             )}
+            <section className="drive-health-section" aria-labelledby="drive-health-title">
+              <div className="drive-health-heading">
+                <div>
+                  <h2 id="drive-health-title">Physical drive health</h2>
+                  <p>{driveHealthLoading && driveHealth.length === 0 ? "Reading UDisks health data…" : `${driveHealth.length} physical drives · refreshes every minute`}</p>
+                </div>
+                <button className="startup-refresh-button" type="button" disabled={driveHealthLoading} onClick={() => setDriveHealthRefreshKey((key) => key + 1)}>
+                  {driveHealthLoading ? "Reading…" : "Refresh health"}
+                </button>
+              </div>
+              {driveHealthError ? (
+                <div className="storage-message compact" role="alert">Could not read drive health: {driveHealthError}</div>
+              ) : driveHealthLoading && driveHealth.length === 0 ? (
+                <div className="storage-message compact" role="status">Reading cached drive health information…</div>
+              ) : driveHealth.length === 0 ? (
+                <div className="storage-message compact" role="status">No physical drives with UDisks health information were reported.</div>
+              ) : (
+                <div className="drive-health-grid">
+                  {driveHealth.map((drive) => {
+                    const statusLabel = drive.healthState === "healthy" ? "SMART healthy"
+                      : drive.healthState === "warning" ? "SMART warning"
+                        : drive.healthState === "unsupported" ? "SMART not supported" : "Status unavailable";
+                    const temperature = drive.temperatureCelsius === null ? null
+                      : temperatureUnit === "celsius" ? drive.temperatureCelsius
+                        : drive.temperatureCelsius * 9 / 5 + 32;
+                    return (
+                      <article className="drive-health-card" key={drive.path}>
+                        <div className="drive-health-card-heading">
+                          <div>
+                            <h3>{drive.model}</h3>
+                            <p>{drive.path}</p>
+                          </div>
+                          <span className={`drive-health-status ${drive.healthState}`}>{statusLabel}</span>
+                        </div>
+                        <div className="drive-health-metrics">
+                          <div><span>Temperature</span><strong>{temperature === null ? "Not reported" : `${temperature.toFixed(0)}°${temperatureUnit === "celsius" ? "C" : "F"}`}</strong></div>
+                          <div><span>Power-on time</span><strong>{drive.powerOnHours === null ? "Not reported" : `${drive.powerOnHours.toLocaleString()} h`}</strong></div>
+                          <div><span>Bad sectors</span><strong>{drive.badSectors === null ? "Not reported" : drive.badSectors.toLocaleString()}</strong></div>
+                          <div><span>Failing attributes</span><strong>{drive.attributesFailing === null ? "Not reported" : drive.attributesFailing.toLocaleString()}</strong></div>
+                        </div>
+                        <p className="drive-health-updated">{drive.smartUpdatedUnixSeconds ? `SMART data last updated ${new Date(drive.smartUpdatedUnixSeconds * 1000).toLocaleString()}` : "UDisks has no recent SMART update for this drive."}</p>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="storage-footnote">Health information is read from UDisks’ cached SMART data. Some drives expose only limited metrics; this is a warning indicator, not a guarantee against failure. Kestrel does not run self-tests or change drive settings.</p>
+            </section>
             <section className="partition-inventory" aria-labelledby="partition-inventory-title">
               <div className="partition-inventory-heading">
                 <div>

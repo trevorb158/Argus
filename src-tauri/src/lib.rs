@@ -111,6 +111,20 @@ struct DriveSnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DriveHealthSnapshot {
+    path: String,
+    model: String,
+    smart_supported: Option<bool>,
+    health_state: String,
+    temperature_celsius: Option<f32>,
+    power_on_hours: Option<u64>,
+    bad_sectors: Option<u64>,
+    attributes_failing: Option<u64>,
+    smart_updated_unix_seconds: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ServiceSnapshot {
     unit: String,
     description: String,
@@ -1652,6 +1666,112 @@ async fn set_partition_mounted(path: String, mount: bool) -> Result<String, Stri
 }
 
 #[tauri::command]
+fn get_drive_health() -> Result<Vec<DriveHealthSnapshot>, String> {
+    let output = Command::new("udisksctl")
+        .arg("dump")
+        .output()
+        .map_err(|error| format!("Could not query UDisks drive health: {error}"))?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if error.is_empty() { "UDisks could not read drive health information".to_string() } else { error });
+    }
+
+    let dump = String::from_utf8_lossy(&output.stdout);
+    let mut current_object = String::new();
+    let mut current_interface = String::new();
+    let mut drive_properties = BTreeMap::<String, BTreeMap<String, String>>::new();
+    let mut block_links = BTreeMap::<String, (String, String, bool)>::new();
+
+    for line in dump.lines() {
+        if !line.starts_with(' ') && line.starts_with("/org/freedesktop/UDisks2/") && line.ends_with(':') {
+            current_object = line.trim_end_matches(':').to_string();
+            current_interface.clear();
+            continue;
+        }
+        if line.starts_with("  org.freedesktop.UDisks2.") && line.trim_end().ends_with(':') {
+            current_interface = line.trim().trim_end_matches(':').to_string();
+            continue;
+        }
+        let Some((key, raw_value)) = line.trim_start().split_once(':') else { continue };
+        let value = raw_value.trim().trim_matches('\'').to_string();
+        if current_interface == "org.freedesktop.UDisks2.Block" {
+            let link = block_links.entry(current_object.clone()).or_insert_with(|| (String::new(), String::new(), false));
+            match key.trim() {
+                "Device" => link.0 = value,
+                "Drive" => link.1 = value,
+                _ => {}
+            }
+        } else if current_interface == "org.freedesktop.UDisks2.Partition" {
+            block_links.entry(current_object.clone()).or_insert_with(|| (String::new(), String::new(), false)).2 = true;
+        } else if current_interface == "org.freedesktop.UDisks2.Drive"
+            || current_interface == "org.freedesktop.UDisks2.Drive.Ata"
+            || current_interface == "org.freedesktop.UDisks2.NVMe.Controller"
+        {
+            drive_properties
+                .entry(current_object.clone())
+                .or_default()
+                .insert(format!("{current_interface}.{}", key.trim()), value);
+        }
+    }
+
+    let mut drives = Vec::new();
+    for (_block_object, (device, drive_object, is_partition)) in block_links {
+        if is_partition || !device.starts_with("/dev/") || drive_object.is_empty() || drive_object == "/" {
+            continue;
+        }
+        let Some(properties) = drive_properties.get(&drive_object) else { continue };
+        let property = |interface: &str, name: &str| properties.get(&format!("org.freedesktop.UDisks2.{interface}.{name}"));
+        let model = property("Drive", "Model").cloned().filter(|value| !value.is_empty()).unwrap_or_else(|| "Unknown drive".to_string());
+        let sata_supported = property("Drive.Ata", "SmartSupported").and_then(|value| value.parse::<bool>().ok());
+        let nvme_supported = property("NVMe.Controller", "SmartUpdated").is_some();
+        let smart_supported = sata_supported.or_else(|| nvme_supported.then_some(true));
+        let updated = property("Drive.Ata", "SmartUpdated")
+            .or_else(|| property("NVMe.Controller", "SmartUpdated"))
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0);
+        let sata_failing = property("Drive.Ata", "SmartFailing").and_then(|value| value.parse::<bool>().ok());
+        let nvme_warning = property("NVMe.Controller", "SmartCriticalWarning").map(|value| value.trim().is_empty() || value == "[]");
+        let health_state = if smart_supported == Some(false) {
+            "unsupported"
+        } else if smart_supported.is_none() || updated.is_none() {
+            "unknown"
+        } else if sata_failing == Some(true) || nvme_warning == Some(false) {
+            "warning"
+        } else if sata_failing == Some(false) || nvme_warning == Some(true) {
+            "healthy"
+        } else {
+            "unknown"
+        }.to_string();
+        let temperature_kelvin = property("Drive.Ata", "SmartTemperature")
+            .or_else(|| property("NVMe.Controller", "SmartTemperature"))
+            .and_then(|value| value.parse::<f32>().ok());
+        let temperature_celsius = temperature_kelvin
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .map(|value| value - 273.15);
+        let power_on_hours = property("Drive.Ata", "SmartPowerOnSeconds")
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(|seconds| seconds / 3600)
+            .or_else(|| property("NVMe.Controller", "SmartPowerOnHours").and_then(|value| value.parse::<u64>().ok()));
+        let bad_sectors = property("Drive.Ata", "SmartNumBadSectors").and_then(|value| value.parse::<i64>().ok()).filter(|value| *value >= 0).map(|value| value as u64);
+        let attributes_failing = property("Drive.Ata", "SmartNumAttributesFailing").and_then(|value| value.parse::<i64>().ok()).filter(|value| *value >= 0).map(|value| value as u64);
+
+        drives.push(DriveHealthSnapshot {
+            path: device,
+            model,
+            smart_supported,
+            health_state,
+            temperature_celsius,
+            power_on_hours,
+            bad_sectors,
+            attributes_failing,
+            smart_updated_unix_seconds: updated,
+        });
+    }
+    drives.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(drives)
+}
+
+#[tauri::command]
 fn get_storage() -> Vec<DriveSnapshot> {
     let disks = Disks::new_with_refreshed_list();
 
@@ -1696,6 +1816,7 @@ pub fn run() {
             set_service_state,
             set_startup_enabled,
             get_storage,
+            get_drive_health,
             get_partitions,
             set_partition_mounted,
             get_processes,

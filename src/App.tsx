@@ -149,6 +149,7 @@ type TemperatureUnit = "celsius" | "fahrenheit";
 type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "maintenance" | "settings" | "performance";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
+type ProcessStateFilter = "all" | "running" | "sleeping" | "stopped" | "zombie";
 
 type HistorySample = {
   timestamp: number;
@@ -281,6 +282,7 @@ function App() {
   const [processError, setProcessError] = useState<string | null>(null);
   const [processLoading, setProcessLoading] = useState(false);
   const [processQuery, setProcessQuery] = useState("");
+  const [processStateFilter, setProcessStateFilter] = useState<ProcessStateFilter>("all");
   const [processSort, setProcessSort] = useState<ProcessSort>({
     key: "cpu",
     direction: "desc",
@@ -770,11 +772,18 @@ function App() {
   const filteredProcesses = processes
     .filter((process) => {
       const query = processQuery.trim().toLocaleLowerCase();
-      return (
+      const matchesSearch =
         !query ||
         process.name.toLocaleLowerCase().includes(query) ||
-        String(process.pid).includes(query)
-      );
+        String(process.pid).includes(query);
+      const status = process.status.toLocaleLowerCase();
+      const matchesState =
+        processStateFilter === "all" ||
+        (processStateFilter === "running" && status === "run") ||
+        (processStateFilter === "sleeping" && (status === "sleep" || status === "idle")) ||
+        (processStateFilter === "stopped" && status === "stop") ||
+        (processStateFilter === "zombie" && status === "zombie");
+      return matchesSearch && matchesState;
     })
     .sort((a, b) => {
       let comparison = 0;
@@ -1413,8 +1422,23 @@ function App() {
             <div className="process-toolbar">
               <div>
                 <h2 id="process-list-title">Process list</h2>
-                <p>{filteredProcesses.length} shown · refreshed every 2.5 seconds</p>
+                <p>{filteredProcesses.length} of {processes.length} processes · refreshed every 2.5 seconds</p>
               </div>
+              <div className="process-toolbar-controls">
+                <label className="process-filter-label">
+                  <span className="sr-only">Filter processes by state</span>
+                  <select
+                    className="process-filter"
+                    value={processStateFilter}
+                    onChange={(event) => setProcessStateFilter(event.target.value as ProcessStateFilter)}
+                  >
+                    <option value="all">All states</option>
+                    <option value="running">Running</option>
+                    <option value="sleeping">Sleeping / idle</option>
+                    <option value="stopped">Stopped</option>
+                    <option value="zombie">Zombie</option>
+                  </select>
+                </label>
               <label className="process-search">
                 <span className="sr-only">Search by process name or PID</span>
                 <span aria-hidden="true">⌕</span>
@@ -1425,6 +1449,7 @@ function App() {
                   placeholder="Search processes…"
                 />
               </label>
+              </div>
             </div>
 
             {processActionStatus && (
@@ -1446,7 +1471,7 @@ function App() {
               </div>
             ) : filteredProcesses.length === 0 ? (
               <div className="process-message" role="status">
-                {processQuery ? "No processes match your search." : "No processes were found."}
+                {processQuery || processStateFilter !== "all" ? "No processes match these filters." : "No processes were found."}
               </div>
             ) : (
               <div className="process-table-wrap">

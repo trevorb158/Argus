@@ -1526,7 +1526,38 @@ h1 {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: min(520px, 62%);
+  width: min(740px, 72%);
+}
+
+.process-view-switch {
+  display: flex;
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 1px solid #29313b;
+  border-radius: 7px;
+  background: #0e1319;
+}
+
+.process-view-switch button {
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #82909f;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.process-view-switch button.active {
+  background: #1b2b28;
+  color: #a7e6d1;
+}
+
+.process-view-switch button:focus-visible,
+.process-tree-toggle:focus-visible {
+  outline: 2px solid rgba(84, 184, 157, 0.55);
+  outline-offset: 1px;
 }
 
 .process-filter-label {
@@ -1656,6 +1687,43 @@ h1 {
   color: #d9e0e8 !important;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.process-name-content {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+}
+
+.process-name-content > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.process-tree-toggle,
+.process-tree-spacer {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  place-items: center;
+}
+
+.process-tree-toggle {
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #8b9aab;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.process-tree-toggle:hover {
+  background: #202b35;
+  color: #b9f0dc;
 }
 
 .process-number {
@@ -1906,6 +1974,10 @@ h1 {
     width: 100%;
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .process-view-switch {
+    align-self: flex-start;
   }
 
   .process-filter-label,

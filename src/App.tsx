@@ -150,6 +150,8 @@ type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "s
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 type ProcessStateFilter = "all" | "running" | "sleeping" | "stopped" | "zombie";
+type ProcessViewMode = "list" | "tree";
+type ProcessTreeRow = { process: ProcessSnapshot; depth: number; childCount: number };
 
 type HistorySample = {
   timestamp: number;
@@ -283,6 +285,8 @@ function App() {
   const [processLoading, setProcessLoading] = useState(false);
   const [processQuery, setProcessQuery] = useState("");
   const [processStateFilter, setProcessStateFilter] = useState<ProcessStateFilter>("all");
+  const [processViewMode, setProcessViewMode] = useState<ProcessViewMode>("list");
+  const [collapsedProcessPids, setCollapsedProcessPids] = useState<number[]>([]);
   const [processSort, setProcessSort] = useState<ProcessSort>({
     key: "cpu",
     direction: "desc",
@@ -803,6 +807,55 @@ function App() {
       }
       return processSort.direction === "asc" ? comparison : -comparison;
     });
+
+  const processTreeRows: ProcessTreeRow[] = [];
+  if (processViewMode === "list") {
+    filteredProcesses.forEach((process) => processTreeRows.push({ process, depth: 0, childCount: 0 }));
+  } else {
+    const processByPid = new Map(filteredProcesses.map((process) => [process.pid, process]));
+    const childrenByParent = new Map<number, ProcessSnapshot[]>();
+    const roots: ProcessSnapshot[] = [];
+    for (const process of filteredProcesses) {
+      const parent = process.parentPid === null ? undefined : processByPid.get(process.parentPid);
+      if (parent && parent.pid !== process.pid) {
+        const children = childrenByParent.get(parent.pid) ?? [];
+        children.push(process);
+        childrenByParent.set(parent.pid, children);
+      } else {
+        roots.push(process);
+      }
+    }
+    const visited = new Set<number>();
+    const hiddenByCollapse = new Set<number>();
+    const markDescendantsHidden = (process: ProcessSnapshot) => {
+      for (const child of childrenByParent.get(process.pid) ?? []) {
+        if (hiddenByCollapse.has(child.pid)) continue;
+        hiddenByCollapse.add(child.pid);
+        markDescendantsHidden(child);
+      }
+    };
+    const appendProcess = (process: ProcessSnapshot, depth: number) => {
+      if (visited.has(process.pid)) return;
+      visited.add(process.pid);
+      const children = childrenByParent.get(process.pid) ?? [];
+      processTreeRows.push({ process, depth, childCount: children.length });
+      if (collapsedProcessPids.includes(process.pid)) {
+        markDescendantsHidden(process);
+      } else {
+        children.forEach((child) => appendProcess(child, depth + 1));
+      }
+    };
+    roots.forEach((process) => appendProcess(process, 0));
+    filteredProcesses.forEach((process) => {
+      if (!visited.has(process.pid) && !hiddenByCollapse.has(process.pid)) appendProcess(process, 0);
+    });
+  }
+
+  function toggleProcessCollapsed(pid: number) {
+    setCollapsedProcessPids((current) =>
+      current.includes(pid) ? current.filter((value) => value !== pid) : [...current, pid],
+    );
+  }
 
   function sortProcesses(key: ProcessSortKey) {
     setProcessSort((current) => ({
@@ -1425,6 +1478,18 @@ function App() {
                 <p>{filteredProcesses.length} of {processes.length} processes · refreshed every 2.5 seconds</p>
               </div>
               <div className="process-toolbar-controls">
+                <div className="process-view-switch" role="group" aria-label="Process list view">
+                  <button
+                    className={processViewMode === "list" ? "active" : ""}
+                    aria-pressed={processViewMode === "list"}
+                    onClick={() => setProcessViewMode("list")}
+                  >List</button>
+                  <button
+                    className={processViewMode === "tree" ? "active" : ""}
+                    aria-pressed={processViewMode === "tree"}
+                    onClick={() => setProcessViewMode("tree")}
+                  >Tree</button>
+                </div>
                 <label className="process-filter-label">
                   <span className="sr-only">Filter processes by state</span>
                   <select
@@ -1494,11 +1559,23 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredProcesses.map((process) => (
+                    {processTreeRows.map(({ process, depth, childCount }) => (
                       <Fragment key={process.pid}>
                       <tr>
                         <td className="process-name" title={process.name || "Unnamed process"}>
-                          {process.name || "Unnamed process"}
+                          <span className="process-name-content" style={{ paddingLeft: processViewMode === "tree" ? `${Math.min(depth, 12) * 16}px` : undefined }}>
+                            {processViewMode === "tree" && childCount > 0 ? (
+                              <button
+                                className="process-tree-toggle"
+                                onClick={() => toggleProcessCollapsed(process.pid)}
+                                aria-expanded={!collapsedProcessPids.includes(process.pid)}
+                                aria-label={`${collapsedProcessPids.includes(process.pid) ? "Expand" : "Collapse"} ${process.name}, ${childCount} child processes`}
+                              >
+                                {collapsedProcessPids.includes(process.pid) ? "▸" : "▾"}
+                              </button>
+                            ) : processViewMode === "tree" ? <span className="process-tree-spacer" /> : null}
+                            <span>{process.name || "Unnamed process"}</span>
+                          </span>
                         </td>
                         <td className="process-number">{process.pid}</td>
                         <td className="process-number process-cpu-cell">

@@ -5,6 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sysinfo::{Components, Disks, Networks, Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
@@ -167,6 +168,24 @@ fn collect_partitions(devices: Vec<LsblkDevice>, output: &mut Vec<PartitionSnaps
 
         collect_partitions(device.children, output);
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LargeFileSnapshot {
+    path: String,
+    size_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LargeFileScanResult {
+    root: String,
+    files: Vec<LargeFileSnapshot>,
+    scanned_entries: usize,
+    skipped_entries: usize,
+    scan_limited: bool,
+    results_limited: bool,
 }
 
 #[derive(Serialize)]
@@ -657,6 +676,117 @@ fn get_temperatures() -> Vec<TemperatureSnapshot> {
 }
 
 #[tauri::command]
+async fn scan_large_files(root: String, minimum_size_bytes: u64) -> Result<LargeFileScanResult, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_large_files_inner(root, minimum_size_bytes))
+        .await
+        .map_err(|error| format!("The folder scan could not finish: {error}"))?
+}
+
+fn scan_large_files_inner(root: String, minimum_size_bytes: u64) -> Result<LargeFileScanResult, String> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    const MAX_SCANNED_ENTRIES: usize = 100_000;
+    const MAX_RESULTS: usize = 250;
+    const MAX_DURATION: Duration = Duration::from_secs(20);
+
+    let root = PathBuf::from(root)
+        .canonicalize()
+        .map_err(|error| format!("Could not open the selected folder: {error}"))?;
+    if !root.is_dir() {
+        return Err("Choose a folder to scan".to_string());
+    }
+
+    let started = Instant::now();
+    let mut pending = vec![root.clone()];
+    let mut largest = BinaryHeap::<Reverse<(u64, String)>>::new();
+    let mut scanned_entries = 0usize;
+    let mut skipped_entries = 0usize;
+    let mut scan_limited = false;
+    let mut results_limited = false;
+
+    while let Some(directory) = pending.pop() {
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(_) => {
+                skipped_entries += 1;
+                continue;
+            }
+        };
+
+        for entry in entries {
+            if scanned_entries >= MAX_SCANNED_ENTRIES || started.elapsed() >= MAX_DURATION {
+                scan_limited = true;
+                break;
+            }
+            scanned_entries += 1;
+
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    skipped_entries += 1;
+                    continue;
+                }
+            };
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => {
+                    skipped_entries += 1;
+                    continue;
+                }
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                pending.push(entry.path());
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    skipped_entries += 1;
+                    continue;
+                }
+            };
+            let size = metadata.len();
+            if size < minimum_size_bytes {
+                continue;
+            }
+            let path = entry.path().to_string_lossy().into_owned();
+            largest.push(Reverse((size, path)));
+            if largest.len() > MAX_RESULTS {
+                largest.pop();
+                results_limited = true;
+            }
+        }
+
+        if scan_limited {
+            break;
+        }
+    }
+
+    let mut files = largest
+        .into_iter()
+        .map(|Reverse((size_bytes, path))| LargeFileSnapshot { path, size_bytes })
+        .collect::<Vec<_>>();
+    files.sort_by(|left, right| right.size_bytes.cmp(&left.size_bytes));
+
+    Ok(LargeFileScanResult {
+        root: root.to_string_lossy().into_owned(),
+        files,
+        scanned_entries,
+        skipped_entries,
+        scan_limited,
+        results_limited,
+    })
+}
+
+#[tauri::command]
 fn get_processes(
     state: tauri::State<'_, TelemetryState>,
 ) -> Result<Vec<ProcessSnapshot>, String> {
@@ -793,6 +923,7 @@ pub fn run() {
             get_storage,
             get_partitions,
             get_processes,
+            scan_large_files,
             terminate_process
         ])
         .run(tauri::generate_context!())

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 
 type TelemetrySnapshot = {
@@ -67,6 +67,15 @@ type DiagnosticsSnapshot = Omit<SystemInfoSnapshot, "hostName"> & {
   memoryUsedBytes: number;
 };
 type DiagnosticsStatus = { kind: "success" | "error"; message: string };
+type LargeFileSnapshot = { path: string; sizeBytes: number };
+type LargeFileScanResult = {
+  root: string;
+  files: LargeFileSnapshot[];
+  scannedEntries: number;
+  skippedEntries: number;
+  scanLimited: boolean;
+  resultsLimited: boolean;
+};
 
 type DriveSnapshot = {
   name: string;
@@ -101,7 +110,7 @@ type ProcessSnapshot = {
 
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
 
-type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics";
+type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "maintenance";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 
@@ -195,6 +204,10 @@ function App() {
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [diagnosticsSaving, setDiagnosticsSaving] = useState(false);
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<DiagnosticsStatus | null>(null);
+  const [largeFileScan, setLargeFileScan] = useState<LargeFileScanResult | null>(null);
+  const [largeFileMinimum, setLargeFileMinimum] = useState(100 * 1024 * 1024);
+  const [largeFileLoading, setLargeFileLoading] = useState(false);
+  const [largeFileError, setLargeFileError] = useState<string | null>(null);
   const previousNetworkCounters = useRef<Record<string, {
     receivedBytes: number;
     transmittedBytes: number;
@@ -814,6 +827,29 @@ function App() {
     }
   }
 
+  async function chooseAndScanLargeFiles() {
+    setLargeFileError(null);
+    try {
+      const selected = await openDialog({
+        title: "Choose a folder to scan for large files",
+        directory: true,
+        multiple: false,
+      });
+      if (typeof selected !== "string") return;
+      setLargeFileLoading(true);
+      setLargeFileScan(null);
+      const result = await invoke<LargeFileScanResult>("scan_large_files", {
+        root: selected,
+        minimumSizeBytes: largeFileMinimum,
+      });
+      setLargeFileScan(result);
+    } catch (error) {
+      setLargeFileError(String(error));
+    } finally {
+      setLargeFileLoading(false);
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -883,6 +919,13 @@ function App() {
           >
             <span>▤</span> Diagnostics
           </button>
+          <button
+            className={`nav-item${page === "maintenance" ? " active" : ""}`}
+            aria-current={page === "maintenance" ? "page" : undefined}
+            onClick={() => setPage("maintenance")}
+          >
+            <span>⌕</span> Maintenance
+          </button>
           <button className="nav-item upcoming" disabled title="Coming later">
             <span>⚙</span> Settings <small>SOON</small>
           </button>
@@ -921,9 +964,11 @@ function App() {
                           ? "BACKGROUND SERVICES"
                           : page === "system"
                             ? "DEVICE INFORMATION"
-                            : "SUPPORT TOOLS"}
+                            : page === "diagnostics"
+                              ? "SUPPORT TOOLS"
+                              : "STORAGE TOOLS"}
             </p>
-            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : "Diagnostics"}</h1>
+            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : page === "diagnostics" ? "Diagnostics" : "Maintenance"}</h1>
             <p className="subheading">
               {page === "overview"
                 ? "A clear view of your workstation, at a glance."
@@ -939,7 +984,9 @@ function App() {
                           ? "Review service activity and its configured startup mode."
                           : page === "system"
                             ? "Review operating system, hardware, and desktop session details."
-                            : "Create a local support summary and review it before saving."}
+                            : page === "diagnostics"
+                            ? "Create a local support summary and review it before saving."
+                            : "Find large files in a folder you choose, without changing anything."}
             </p>
           </div>
           <div className="refresh-state">
@@ -971,9 +1018,13 @@ function App() {
                               ? systemInfoError
                                 ? "status-dot muted"
                                 : "status-dot"
-                              : diagnosticsStatus?.kind === "error"
-                                ? "status-dot muted"
-                                : "status-dot"
+                              : page === "diagnostics"
+                                ? diagnosticsStatus?.kind === "error"
+                                  ? "status-dot muted"
+                                  : "status-dot"
+                                : largeFileError
+                                  ? "status-dot muted"
+                                  : "status-dot"
               }
             />
             {page === "overview"
@@ -1012,7 +1063,9 @@ function App() {
                               : systemInfoLoading
                                 ? "Reading device information"
                                 : systemInfo?.operatingSystem ?? "System information unavailable"
-                            : diagnosticsStatus?.message ?? (diagnosticsLoading ? "Collecting local details" : diagnosticsSnapshot ? "Report ready for review" : "No report collected")}
+                            : page === "diagnostics"
+                              ? diagnosticsStatus?.message ?? (diagnosticsLoading ? "Collecting local details" : diagnosticsSnapshot ? "Report ready for review" : "No report collected")
+                              : largeFileError ? "Folder scan unavailable" : largeFileLoading ? "Scanning selected folder" : largeFileScan ? (largeFileScan.files.length + " large files found") : "No folder scanned"}
           </div>
         </section>
 
@@ -1716,6 +1769,63 @@ function App() {
               </div>
             )}
             <p className="service-footnote">These details stay on this device. Some values depend on what the kernel and desktop environment make available.</p>
+          </section>
+        ) : page === "maintenance" ? (
+          <section className="maintenance-page" aria-labelledby="maintenance-page-title">
+            <div className="maintenance-heading">
+              <div>
+                <h2 id="maintenance-page-title">Large file finder</h2>
+                <p>Scan one folder you choose. Kestrel reads file metadata only and never deletes or opens file contents.</p>
+              </div>
+              <div className="maintenance-controls">
+                <label className="maintenance-threshold">
+                  <span>Minimum size</span>
+                  <select value={largeFileMinimum} onChange={(event) => { setLargeFileMinimum(Number(event.target.value)); setLargeFileScan(null); }}>
+                    <option value={100 * 1024 * 1024}>100 MiB</option>
+                    <option value={500 * 1024 * 1024}>500 MiB</option>
+                    <option value={1024 * 1024 * 1024}>1 GiB</option>
+                  </select>
+                </label>
+                <button className="startup-refresh-button" disabled={largeFileLoading} onClick={() => void chooseAndScanLargeFiles()}>
+                  {largeFileLoading ? "Scanning…" : "Choose folder and scan"}
+                </button>
+              </div>
+            </div>
+            <div className="maintenance-note">
+              Pick a focused folder such as Downloads or Videos. A scan stops after 100,000 entries or 20 seconds. Symbolic links are skipped, and no files are changed.
+            </div>
+            {largeFileError && <div className="storage-message" role="alert">Could not scan the folder: {largeFileError}</div>}
+            {largeFileLoading ? (
+              <div className="storage-message" role="status">Scanning file sizes and folders…</div>
+            ) : largeFileScan ? (
+              <>
+                <div className="maintenance-summary">
+                  <span>Folder <strong>{largeFileScan.root}</strong></span>
+                  <span>{largeFileScan.scannedEntries.toLocaleString()} entries checked</span>
+                  {largeFileScan.skippedEntries > 0 && <span>{largeFileScan.skippedEntries.toLocaleString()} inaccessible entries skipped</span>}
+                </div>
+                {largeFileScan.scanLimited && <div className="service-warning" role="status">The scan reached its workload limit. Choose a smaller folder for a more complete result.</div>}
+                {largeFileScan.resultsLimited && <div className="service-warning" role="status">Showing the 250 largest matching files.</div>}
+                {largeFileScan.files.length === 0 ? (
+                  <div className="storage-message" role="status">No files at or above {formatProcessMemory(largeFileMinimum)} were found in this scan.</div>
+                ) : (
+                  <div className="large-file-list">
+                    {largeFileScan.files.map((file) => (
+                      <article className="large-file-entry" key={file.path}>
+                        <div className="large-file-name">
+                          <strong>{file.path.split("/").pop() || file.path}</strong>
+                          <small>{file.path}</small>
+                        </div>
+                        <span>{formatProcessMemory(file.sizeBytes)}</span>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="storage-message" role="status">Choose a folder to start a read-only scan.</div>
+            )}
+            <p className="service-footnote">This finder only reports large files. It does not select files for deletion, clean caches, or change permissions.</p>
           </section>
         ) : (
           <section className="diagnostics-page" aria-labelledby="diagnostics-page-title">

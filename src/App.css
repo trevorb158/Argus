@@ -744,6 +744,126 @@ h1 {
   text-align: center;
 }
 
+.storage-message.compact {
+  min-height: 100px;
+}
+
+.partition-inventory {
+  margin-top: 22px;
+}
+
+.partition-inventory-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.partition-inventory-heading h2 {
+  margin: 0 0 5px;
+  color: #dfe6ed;
+  font-size: 14px;
+}
+
+.partition-inventory-heading p {
+  margin: 0;
+  color: #788593;
+  font-size: 10px;
+}
+
+.partition-list {
+  overflow: hidden;
+  border: 1px solid #252d37;
+  border-radius: 8px;
+  background: #11171f;
+}
+
+.partition-row {
+  display: grid;
+  grid-template-columns: 32px minmax(150px, 1.5fr) minmax(90px, 0.6fr) minmax(140px, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding: 13px 15px;
+  border-bottom: 1px solid #202832;
+}
+
+.partition-row:last-child {
+  border-bottom: 0;
+}
+
+.partition-device-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid #33433e;
+  border-radius: 8px;
+  background: #17231f;
+  color: #76d5b6;
+  font-size: 12px;
+}
+
+.partition-main,
+.partition-capacity,
+.partition-mount-state {
+  min-width: 0;
+}
+
+.partition-main h3 {
+  overflow: hidden;
+  margin: 0 0 4px;
+  color: #d5dde6;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.partition-main p,
+.partition-capacity span {
+  display: block;
+  overflow: hidden;
+  margin: 0;
+  color: #788593;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.partition-capacity strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #c4ced9;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.partition-mount-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #d4ac6d;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.partition-mount-state.mounted {
+  color: #82d8b8;
+}
+
+.partition-state-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d4ac6d;
+}
+
+.partition-mount-state.mounted .partition-state-dot {
+  background: #67d5b2;
+  box-shadow: 0 0 8px rgba(103, 213, 178, 0.4);
+}
+
 .storage-footnote {
   margin: 15px 0 0;
   color: #707d8b;
@@ -1037,6 +1157,15 @@ h1 {
 }
 
 @media (max-width: 700px) {
+  .partition-row {
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
+  .partition-mount-state {
+    grid-column: 2 / -1;
+    padding-left: 1px;
+  }
   .storage-page-toolbar {
     align-items: stretch;
     flex-direction: column;

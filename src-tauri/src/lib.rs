@@ -1,6 +1,7 @@
+use std::process::Command;
 use std::sync::Mutex;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sysinfo::{Disks, Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
 
 #[derive(Serialize)]
@@ -20,6 +21,68 @@ struct DriveSnapshot {
     total_bytes: u64,
     available_bytes: u64,
     is_removable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PartitionSnapshot {
+    name: String,
+    path: String,
+    device_type: String,
+    file_system: Option<String>,
+    label: Option<String>,
+    size_bytes: u64,
+    mount_points: Vec<String>,
+    is_removable: bool,
+}
+
+#[derive(Deserialize)]
+struct LsblkOutput {
+    blockdevices: Vec<LsblkDevice>,
+}
+
+#[derive(Deserialize)]
+struct LsblkDevice {
+    name: String,
+    path: Option<String>,
+    #[serde(rename = "type")]
+    device_type: String,
+    fstype: Option<String>,
+    label: Option<String>,
+    size: Option<u64>,
+    mountpoints: Option<Vec<Option<String>>>,
+    rm: Option<bool>,
+    #[serde(default)]
+    children: Vec<LsblkDevice>,
+}
+
+fn collect_partitions(devices: Vec<LsblkDevice>, output: &mut Vec<PartitionSnapshot>) {
+    for device in devices {
+        let mount_points = device
+            .mountpoints
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let include_device = device.device_type == "part"
+            || (device.fstype.as_ref().is_some_and(|fs| !fs.is_empty())
+                && device.device_type == "disk");
+
+        if include_device {
+            output.push(PartitionSnapshot {
+                name: device.name,
+                path: device.path.unwrap_or_default(),
+                device_type: device.device_type,
+                file_system: device.fstype,
+                label: device.label,
+                size_bytes: device.size.unwrap_or_default(),
+                mount_points,
+                is_removable: device.rm.unwrap_or(false),
+            });
+        }
+
+        collect_partitions(device.children, output);
+    }
 }
 
 #[derive(Serialize)]
@@ -134,6 +197,25 @@ fn terminate_process(
 }
 
 #[tauri::command]
+fn get_partitions() -> Result<Vec<PartitionSnapshot>, String> {
+    let output = Command::new("lsblk")
+        .args(["--json", "--bytes", "--output", "NAME,PATH,TYPE,FSTYPE,LABEL,SIZE,MOUNTPOINTS,RM"])
+        .output()
+        .map_err(|error| format!("Could not start lsblk: {error}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let inventory: LsblkOutput = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Could not read Linux block-device information: {error}"))?;
+    let mut partitions = Vec::new();
+    collect_partitions(inventory.blockdevices, &mut partitions);
+    partitions.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(partitions)
+}
+
+#[tauri::command]
 fn get_storage() -> Vec<DriveSnapshot> {
     let disks = Disks::new_with_refreshed_list();
 
@@ -163,6 +245,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_telemetry,
             get_storage,
+            get_partitions,
             get_processes,
             terminate_process
         ])

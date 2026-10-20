@@ -17,6 +17,17 @@ type DriveSnapshot = {
   isRemovable: boolean;
 };
 
+type PartitionSnapshot = {
+  name: string;
+  path: string;
+  deviceType: string;
+  fileSystem: string | null;
+  label: string | null;
+  sizeBytes: number;
+  mountPoints: string[];
+  isRemovable: boolean;
+};
+
 type ProcessSnapshot = {
   pid: number;
   name: string;
@@ -70,6 +81,9 @@ function App() {
   const [historyWindow, setHistoryWindow] = useState(300);
   const [drives, setDrives] = useState<DriveSnapshot[]>([]);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [partitions, setPartitions] = useState<PartitionSnapshot[]>([]);
+  const [partitionError, setPartitionError] = useState<string | null>(null);
+  const [partitionLoading, setPartitionLoading] = useState(false);
   const [driveQuery, setDriveQuery] = useState("");
   const [processes, setProcesses] = useState<ProcessSnapshot[]>([]);
   const [processError, setProcessError] = useState<string | null>(null);
@@ -160,6 +174,37 @@ function App() {
       window.clearInterval(intervalId);
     };
   }, []);
+
+  useEffect(() => {
+    if (page !== "storage") return;
+
+    let active = true;
+    let timeoutId = 0;
+    setPartitionLoading(true);
+
+    async function refreshPartitions() {
+      try {
+        const snapshot = await invoke<PartitionSnapshot[]>("get_partitions");
+        if (active) {
+          setPartitions(snapshot);
+          setPartitionError(null);
+        }
+      } catch (error) {
+        if (active) setPartitionError(String(error));
+      } finally {
+        if (active) {
+          setPartitionLoading(false);
+          timeoutId = window.setTimeout(() => void refreshPartitions(), 15000);
+        }
+      }
+    }
+
+    void refreshPartitions();
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [page]);
 
   useEffect(() => {
     if (page !== "processes") return;
@@ -253,6 +298,17 @@ function App() {
       );
     })
     .sort((a, b) => a.mountPoint.localeCompare(b.mountPoint));
+
+  const filteredPartitions = partitions.filter((partition) => {
+    const query = driveQuery.trim().toLocaleLowerCase();
+    return (
+      !query ||
+      partition.name.toLocaleLowerCase().includes(query) ||
+      partition.path.toLocaleLowerCase().includes(query) ||
+      (partition.label ?? "").toLocaleLowerCase().includes(query) ||
+      (partition.fileSystem ?? "").toLocaleLowerCase().includes(query)
+    );
+  });
 
   const filteredProcesses = processes
     .filter((process) => {
@@ -796,8 +852,55 @@ function App() {
                 })}
               </div>
             )}
+            <section className="partition-inventory" aria-labelledby="partition-inventory-title">
+              <div className="partition-inventory-heading">
+                <div>
+                  <h2 id="partition-inventory-title">Detected partitions</h2>
+                  <p>{partitionLoading && partitions.length === 0 ? "Scanning block devices…" : `${filteredPartitions.length} of ${partitions.length} entries · refreshes every 15 seconds`}</p>
+                </div>
+              </div>
+
+              {partitionError ? (
+                <div className="storage-message compact" role="alert">
+                  Could not read the partition inventory: {partitionError}
+                </div>
+              ) : partitionLoading && partitions.length === 0 ? (
+                <div className="storage-message compact" role="status">Reading Linux block-device information…</div>
+              ) : filteredPartitions.length === 0 ? (
+                <div className="storage-message compact" role="status">
+                  {partitions.length === 0 ? "No partitions were reported by Linux." : "No partitions match your search."}
+                </div>
+              ) : (
+                <div className="partition-list">
+                  {filteredPartitions.map((partition) => {
+                    const isMounted = partition.mountPoints.some((point) => point !== "[SWAP]");
+                    const isActiveSwap = partition.mountPoints.includes("[SWAP]");
+                    const mountSummary = isMounted
+                      ? partition.mountPoints.filter((point) => point !== "[SWAP]").join(" · ")
+                      : isActiveSwap ? "Active swap" : "Not mounted";
+                    return (
+                      <article className="partition-row" key={partition.path || partition.name}>
+                        <div className="partition-device-icon" aria-hidden="true">▰</div>
+                        <div className="partition-main">
+                          <h3>{partition.path || partition.name}</h3>
+                          <p>{partition.label || "No label"} · {partition.fileSystem || "Filesystem not reported"}</p>
+                        </div>
+                        <div className="partition-capacity">
+                          <strong>{formatGiB(partition.sizeBytes)} GiB</strong>
+                          <span>{partition.isRemovable ? "Removable" : partition.deviceType === "part" ? "Partition" : "Disk volume"}</span>
+                        </div>
+                        <div className={`partition-mount-state${isMounted || isActiveSwap ? " mounted" : ""}`}>
+                          <span className="partition-state-dot" />
+                          <span>{mountSummary}</span>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
             <p className="storage-footnote">
-              Kestrel currently lists volumes that Linux reports as mounted. Unmounted partitions do not have usable-space readings here; mount them with your desktop’s disk utility to see their capacity. Kestrel does not mount or repair drives.
+              Linux supplies this read-only partition inventory. Used and free space are shown above for mounted volumes; unmounted partitions show capacity only. Kestrel does not mount or repair drives.
             </p>
           </section>
         )}

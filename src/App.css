@@ -2383,3 +2383,23 @@ h1 {
     flex-direction: column;
   }
 }
+
+
+.battery-info-card strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.battery-meter {
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: #28313b;
+}
+
+.battery-meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #67d5b2;
+}

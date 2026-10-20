@@ -20,6 +20,14 @@ struct TelemetrySnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct BatterySnapshot {
+    name: String,
+    capacity_percent: Option<u8>,
+    status: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SystemInfoSnapshot {
     operating_system: String,
     kernel_version: Option<String>,
@@ -32,6 +40,7 @@ struct SystemInfoSnapshot {
     uptime_seconds: u64,
     desktop_environment: Option<String>,
     session_type: Option<String>,
+    batteries: Vec<BatterySnapshot>,
 }
 
 #[derive(Serialize)]
@@ -262,6 +271,36 @@ fn get_telemetry(
     })
 }
 
+fn read_battery_status() -> Vec<BatterySnapshot> {
+    let Ok(entries) = fs::read_dir("/sys/class/power_supply") else {
+        return Vec::new();
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let supply_type = fs::read_to_string(path.join("type")).ok()?;
+            if supply_type.trim() != "Battery" {
+                return None;
+            }
+            let capacity_percent = fs::read_to_string(path.join("capacity"))
+                .ok()
+                .and_then(|value| value.trim().parse::<u8>().ok())
+                .filter(|value| *value <= 100);
+            let status = fs::read_to_string(path.join("status"))
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            Some(BatterySnapshot {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                capacity_percent,
+                status,
+            })
+        })
+        .collect()
+}
+
 #[tauri::command]
 fn get_system_info(state: tauri::State<'_, TelemetryState>) -> Result<SystemInfoSnapshot, String> {
     let system = state
@@ -288,6 +327,7 @@ fn get_system_info(state: tauri::State<'_, TelemetryState>) -> Result<SystemInfo
         uptime_seconds: System::uptime(),
         desktop_environment: env::var("XDG_CURRENT_DESKTOP").ok().filter(|value| !value.is_empty()),
         session_type: env::var("XDG_SESSION_TYPE").ok().filter(|value| !value.is_empty()),
+        batteries: read_battery_status(),
     })
 }
 

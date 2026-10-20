@@ -49,6 +49,7 @@ type ServiceSnapshot = {
 
 type ServiceInventory = { services: ServiceSnapshot[]; warnings: string[] };
 type ServiceFilter = "all" | "active" | "failed" | "enabled";
+type BatterySnapshot = { name: string; capacityPercent: number | null; status: string | null };
 type SystemInfoSnapshot = {
   operatingSystem: string;
   kernelVersion: string | null;
@@ -61,8 +62,9 @@ type SystemInfoSnapshot = {
   uptimeSeconds: number;
   desktopEnvironment: string | null;
   sessionType: string | null;
+  batteries: BatterySnapshot[];
 };
-type DiagnosticsSnapshot = Omit<SystemInfoSnapshot, "hostName"> & {
+type DiagnosticsSnapshot = Omit<SystemInfoSnapshot, "hostName" | "batteries"> & {
   cpuUsagePercent: number;
   memoryUsedBytes: number;
 };
@@ -1862,6 +1864,31 @@ function App() {
                   <strong>{formatUptime(systemInfo.uptimeSeconds)}</strong>
                   <small>Time since this system started</small>
                 </article>
+                {systemInfo.batteries.length === 0 ? (
+                  <article className="system-info-card">
+                    <span className="system-info-label">BATTERY</span>
+                    <strong>Not detected</strong>
+                    <small>This device does not expose battery status.</small>
+                  </article>
+                ) : systemInfo.batteries.map((battery) => (
+                  <article className="system-info-card battery-info-card" key={battery.name}>
+                    <span className="system-info-label">BATTERY · {battery.name}</span>
+                    <strong>{battery.capacityPercent === null ? "Unavailable" : battery.capacityPercent + "%"}</strong>
+                    {battery.capacityPercent !== null && (
+                      <div
+                        className="battery-meter"
+                        role="progressbar"
+                        aria-label={battery.name + " charge"}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={battery.capacityPercent}
+                      >
+                        <span style={{ width: battery.capacityPercent + "%" }} />
+                      </div>
+                    )}
+                    <small>{battery.status ?? "Charge state unavailable"}</small>
+                  </article>
+                ))}
               </div>
             )}
             <p className="service-footnote">These details stay on this device. Some values depend on what the kernel and desktop environment make available.</p>

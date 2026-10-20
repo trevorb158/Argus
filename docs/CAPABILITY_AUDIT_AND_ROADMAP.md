@@ -28,7 +28,7 @@ The following capabilities are present in the code at the audited revision. A li
 | Processes | Lists processes with CPU, memory, parent, state, runtime, and disk I/O details; supports searching, sorting, state filters, a process tree, normal End, and confirmed Force stop. A process must still match its listed PID, name, and start time before Kestrel signals it. Linux permissions can prevent signaling another account's or a system process. |
 | Storage | Shows mounted-volume usage; discovers partitions and mount points; uses UDisks for user-confirmed mount and unmount; reads cached SMART health via UDisks when available. SMART self-tests, filesystem repair, formatting, partition creation, and partition deletion are not implemented. |
 | Network | Shows local interface addresses and traffic rates, the configured default route, and resolver addresses. It is an observer today: it does not connect/disconnect Wi-Fi, change IP/DNS/routes, or manage firewall rules. |
-| Startup | Lists local XDG user autostart entries and can enable or disable eligible user-owned entries after confirmation. System-wide startup entries are not editable through Kestrel. |
+| Startup | Lists XDG user and system autostart entries. User entries can be enabled or disabled directly; system defaults can be enabled or disabled for the current account by creating/updating a per-user XDG override. Shared system files are not modified. |
 | Services | Lists system and user systemd services, filters service states, refreshes status, shows recent service logs, and offers start, stop, enable, or disable for listed services after a consequence-specific confirmation. The former application-level service denylist has been removed; systemd and Linux authorization decide whether a requested action can run. |
 | System information | Shows OS/kernel, processor, memory, architecture, host/session information, uptime, battery charge, battery health estimate and cycle count when exported by Linux, and USB device metadata. USB serial numbers and device contents are not read. |
 | Sensors | Shows temperature sensors and critical limits when the kernel exposes them. It does not control fan curves, GPU power, or other firmware controls. |
@@ -59,7 +59,7 @@ Some boundaries below are deliberate safety checks. Others are temporary impleme
 
 1. **Service impact visibility remains incomplete.** The former hard-coded denylist (including systemd, Polkit, UDisks, NetworkManager, Wi-Fi, display managers, SSH, firewall, storage, and login services) has been removed. Each service action now requires confirmation and the dialog calls out known effects for common critical service groups; system-wide actions use normal Linux authorization. The confirmation now lists declared forward dependencies for start, reverse dependencies for stop, and startup-linked units for enable/disable. This is an advisory relationship preview, not a guaranteed job transaction: runtime state, conditions, conflicts, and authorization can change systemd’s final jobs.
 
-2. **System-wide startup entries are read-only.** The toggle command only edits a user-owned `.desktop` entry under the current account's autostart folder. Add system-wide entry inspection and editing via a narrow privileged operation with a before/after preview, backup, confirmation, authorization, and rollback.
+2. **Shared startup files remain unchanged.** Kestrel can override a system default for the current account using XDG precedence, while leaving `/etc/xdg` and other shared entries untouched. Editing the shared startup entry for all users still needs a narrowly scoped privileged helper, before/after preview, backup, confirmation, authorization, and rollback.
 
 3. **Process signaling has no authorization retry.** Normal End and Force stop use the current process credentials. If Linux denies a signal, Kestrel reports that elevated rights may be needed but cannot request them itself. Add a permission-aware route for an explicitly selected process and show that force stop prevents the app from saving data. Preserve the PID/name/start-time revalidation. Never allow Kestrel to signal itself or PID 1; these are functional invariants, not ordinary user-target controls.
 
@@ -113,7 +113,8 @@ Deliver one tested vertical slice and one Git commit at a time. Update this docu
 - [x] Preview declared dependencies or reverse dependencies from systemd before service changes, and show startup-linked units for enable/disable. The preview is advisory: systemd can select different jobs based on live unit state, conditions, conflicts, and authorization.
 - [ ] Improve the preview with exact transaction jobs from systemd where the manager exposes a safe, non-mutating plan.
 - Add per-action scope/risk descriptions, confirmation, Polkit authorization, progress, cancellation where supported, and actionable errors.
-- Add system-wide startup controls and an elevated process-signal retry.
+- [x] Add current-account startup overrides for system-provided XDG entries; shared system startup files remain unchanged.
+- [ ] Add shared system startup editing through a narrowly scoped authorization helper, plus an elevated process-signal retry.
 - Add an operation history with timestamp, action, target, result, and recovery guidance; omit sensitive command arguments and secrets.
 - Keep OS impossibilities and Kestrel self-protection as explicit invariants.
 

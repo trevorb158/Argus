@@ -55,6 +55,8 @@ type StartupAppSnapshot = {
   command: string;
   source: string;
   enabled: boolean;
+  isSystemEntry: boolean;
+  hasUserOverride: boolean;
 };
 
 type StartupActionStatus = { kind: "success" | "error"; message: string };
@@ -1145,11 +1147,14 @@ function App() {
   }
 
   async function requestStartupToggle(startupApp: StartupAppSnapshot) {
-    if (startupApp.source !== "User" || !startupApp.command.trim()) return;
+    if ((!startupApp.isSystemEntry && startupApp.source !== "User") || !startupApp.command.trim()) return;
     const enabled = !startupApp.enabled;
     const action = enabled ? "enable" : "disable";
+    const scopeNotice = startupApp.isSystemEntry
+      ? "Kestrel will create or update an override in your account’s autostart folder. The shared system entry will not be edited."
+      : "This changes only your account’s startup entry.";
     const confirmed = window.confirm(
-      `${enabled ? "Enable" : "Disable"} ${startupApp.name} at sign-in?\n\nThis changes only your account’s startup entry. It takes effect the next time you sign in and will not start or close the app now.`,
+      `${enabled ? "Enable" : "Disable"} ${startupApp.name} at sign-in?\n\n${scopeNotice} It takes effect the next time you sign in and will not start or close the app now.`,
     );
     if (!confirmed) return;
 
@@ -1160,11 +1165,14 @@ function App() {
         id: startupApp.id,
         enabled,
         expectedEnabled: startupApp.enabled,
+        isSystemEntry: startupApp.isSystemEntry,
       });
       setStartupApps((current) => current.map((entry) => entry.id === updated.id ? updated : entry));
       setStartupActionStatus({
         kind: "success",
-        message: `${startupApp.name} will ${action} at your next sign-in.`,
+        message: startupApp.isSystemEntry
+          ? `${startupApp.name} is ${enabled ? "enabled" : "disabled"} for your next sign-in.`
+          : `${startupApp.name} will ${action} at your next sign-in.`,
       });
     } catch (error) {
       setStartupActionStatus({
@@ -2438,9 +2446,11 @@ function App() {
                     </div>
                     <div className="startup-entry-actions">
                       <span className={`startup-source${startupApp.source === "User" ? " user" : ""}`}>
-                        {startupApp.source}
+                        {startupApp.isSystemEntry
+                          ? startupApp.hasUserOverride ? "System · your override" : "System default"
+                          : "User"}
                       </span>
-                      {startupApp.source === "User" && startupApp.command.trim() ? (
+                      {(startupApp.isSystemEntry || startupApp.source === "User") && startupApp.command.trim() ? (
                         <button
                           className="startup-toggle-button"
                           disabled={startupActionId !== null}
@@ -2448,11 +2458,13 @@ function App() {
                         >
                           {startupActionId === startupApp.id
                             ? "Saving…"
-                            : startupApp.enabled ? "Disable" : "Enable"}
+                            : startupApp.isSystemEntry
+                              ? startupApp.enabled ? "Disable for me" : "Enable for me"
+                              : startupApp.enabled ? "Disable" : "Enable"}
                         </button>
                       ) : (
                         <span className="startup-managed-label">
-                          {startupApp.source === "System" ? "System-managed" : "No launch command"}
+                          {!startupApp.command.trim() ? "No launch command" : "System-managed"}
                         </span>
                       )}
                     </div>
@@ -2461,7 +2473,7 @@ function App() {
               </div>
             )}
             <p className="startup-footnote">
-              This list comes from local XDG autostart entries. You can enable or disable user entries with a launch command; system-managed entries stay read-only. Changes apply at the next sign-in. Desktop-session rules can also affect whether an entry runs.
+              This list comes from local XDG autostart entries. You can change user entries directly and override system defaults for this account; shared system files remain unchanged. Changes apply at the next sign-in. Desktop-session rules can also affect whether an entry runs.
             </p>
           </section>
         ) : page === "services" ? (

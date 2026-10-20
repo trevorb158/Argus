@@ -167,7 +167,7 @@ struct ServiceActionPreview {
     note: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StartupAppSnapshot {
     id: String,
@@ -175,6 +175,8 @@ struct StartupAppSnapshot {
     command: String,
     source: String,
     enabled: bool,
+    is_system_entry: bool,
+    has_user_override: bool,
 }
 
 #[derive(Serialize)]
@@ -601,6 +603,8 @@ fn parse_desktop_entry(path: &Path, source: &str) -> Result<StartupAppSnapshot, 
         command: command.unwrap_or_default(),
         source: source.to_string(),
         enabled: !hidden && gnome_enabled,
+        is_system_entry: source == "System",
+        has_user_override: false,
     })
 }
 
@@ -943,6 +947,14 @@ fn user_config_directory() -> Option<PathBuf> {
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
 }
 
+fn system_config_directories() -> Vec<PathBuf> {
+    let mut directories = env::var_os("XDG_CONFIG_DIRS")
+        .map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_else(|| vec![PathBuf::from("/etc/xdg")]);
+    directories.reverse();
+    directories
+}
+
 fn update_desktop_entry(contents: &str, enabled: bool) -> Result<String, String> {
     let mut lines = Vec::new();
     let mut in_desktop_entry = false;
@@ -1001,15 +1013,97 @@ fn update_desktop_entry(contents: &str, enabled: bool) -> Result<String, String>
     Ok(updated)
 }
 
+fn set_system_startup_override(
+    id: &str,
+    enabled: bool,
+    expected_enabled: bool,
+) -> Result<StartupAppSnapshot, String> {
+    let system_path = system_config_directories()
+        .into_iter()
+        .map(|directory| directory.join("autostart").join(id))
+        .filter(|path| path.is_file())
+        .last()
+        .ok_or_else(|| "The system startup entry no longer exists. Refresh and try again.".to_string())?;
+    let base = parse_desktop_entry(&system_path, "System")?;
+    let directory = user_config_directory()
+        .ok_or_else(|| "Your user configuration directory is unavailable.".to_string())?
+        .join("autostart");
+    let path = directory.join(id);
+    let current_enabled = if path.is_file() {
+        parse_desktop_entry(&path, "User")?.enabled
+    } else {
+        base.enabled
+    };
+    if current_enabled != expected_enabled {
+        return Err("This startup entry changed since the list was loaded. Refresh and try again.".to_string());
+    }
+    if base.command.trim().is_empty() {
+        return Err("This entry has no launch command, so Kestrel cannot safely change it.".to_string());
+    }
+
+    let source_path = if path.is_file() && !parse_desktop_entry(&path, "User")?.command.trim().is_empty() {
+        path.clone()
+    } else {
+        system_path
+    };
+    let contents = fs::read_to_string(&source_path)
+        .map_err(|error| format!("Could not read {}: {error}", source_path.display()))?;
+    let updated_contents = update_desktop_entry(&contents, enabled)?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Could not create your startup override directory: {error}"))?;
+    let temporary_path = directory.join(format!(".{id}.kestrel-{}.tmp", std::process::id()));
+
+    let write_result = (|| -> Result<(), String> {
+        let mut temporary_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
+            .map_err(|error| format!("Could not create a temporary startup override: {error}"))?;
+        temporary_file
+            .write_all(updated_contents.as_bytes())
+            .map_err(|error| format!("Could not write the startup override: {error}"))?;
+        temporary_file
+            .sync_all()
+            .map_err(|error| format!("Could not save the startup override: {error}"))?;
+        drop(temporary_file);
+        fs::rename(&temporary_path, &path)
+            .map_err(|error| format!("Could not apply the startup override: {error}"))?;
+        Ok(())
+    })();
+
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    write_result?;
+    let mut updated = parse_desktop_entry(&path, "User")?;
+    updated.source = "System".to_string();
+    updated.is_system_entry = true;
+    updated.has_user_override = true;
+    Ok(updated)
+}
+
 #[tauri::command]
 fn set_startup_enabled(
     id: String,
     enabled: bool,
     expected_enabled: bool,
+    is_system_entry: bool,
 ) -> Result<StartupAppSnapshot, String> {
     let file_name = Path::new(&id).file_name().and_then(|name| name.to_str());
     if file_name != Some(id.as_str()) || Path::new(&id).extension().and_then(|ext| ext.to_str()) != Some("desktop") {
         return Err("Invalid startup entry identifier.".to_string());
+    }
+
+    let listed = get_startup_apps()?.into_iter().find(|entry| entry.id == id)
+        .ok_or_else(|| "That startup entry is no longer available. Refresh and try again.".to_string())?;
+    if listed.is_system_entry != is_system_entry {
+        return Err("The startup entry source changed. Refresh and try again.".to_string());
+    }
+    if listed.enabled != expected_enabled {
+        return Err("This startup entry changed since the list was loaded. Refresh and try again.".to_string());
+    }
+    if is_system_entry {
+        return set_system_startup_override(&id, enabled, expected_enabled);
     }
 
     let directory = user_config_directory()
@@ -1063,34 +1157,40 @@ fn set_startup_enabled(
 
 #[tauri::command]
 fn get_startup_apps() -> Result<Vec<StartupAppSnapshot>, String> {
-    let mut directories = env::var_os("XDG_CONFIG_DIRS")
-        .map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
-        .unwrap_or_else(|| vec![PathBuf::from("/etc/xdg")]);
-    directories.reverse();
-
-    let mut entries = BTreeMap::new();
-    for directory in directories {
+    let mut system_entries = BTreeMap::new();
+    for directory in system_config_directories() {
         read_autostart_directory(
             &directory.join("autostart"),
             "System",
-            &mut entries,
+            &mut system_entries,
             true,
         )?;
     }
 
-    let user_config = env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
-    if let Some(user_config) = user_config {
+    let mut user_entries = BTreeMap::new();
+    let mut applications = system_entries.clone();
+    if let Some(user_config) = user_config_directory() {
         read_autostart_directory(
             &user_config.join("autostart"),
             "User",
-            &mut entries,
+            &mut user_entries,
             true,
         )?;
     }
 
-    let mut applications = entries.into_values().collect::<Vec<_>>();
+    for (id, user_entry) in user_entries {
+        if let Some(system_entry) = applications.get_mut(&id) {
+            system_entry.enabled = user_entry.enabled;
+            system_entry.has_user_override = true;
+            if !user_entry.command.trim().is_empty() {
+                system_entry.command = user_entry.command;
+            }
+        } else {
+            applications.insert(id, user_entry);
+        }
+    }
+
+    let mut applications = applications.into_values().collect::<Vec<_>>();
     applications.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(applications)
 }

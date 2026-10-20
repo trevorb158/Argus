@@ -1488,7 +1488,7 @@ function App() {
                         <button onClick={() => sortProcesses("cpu")}>CPU <span>↕</span></button>
                       </th>
                       <th aria-sort={processSort.key === "memory" ? `${processSort.direction}ending` : "none"}>
-                        <button onClick={() => sortProcesses("memory")}>Memory <span>↕</span></button>
+                        <button onClick={() => sortProcesses("memory")}>Memory / RAM <span>↕</span></button>
                       </th>
                       <th className="process-action-heading">Action</th>
                     </tr>
@@ -1502,7 +1502,14 @@ function App() {
                         </td>
                         <td className="process-number">{process.pid}</td>
                         <td className="process-number">{process.cpuUsagePercent.toFixed(1)}%</td>
-                        <td className="process-number">{formatProcessMemory(process.memoryBytes)}</td>
+                        <td className="process-number process-memory-cell">
+                          <strong>{formatProcessMemory(process.memoryBytes)}</strong>
+                          <small>
+                            {telemetry && telemetry.memoryTotalBytes > 0
+                              ? `${(process.memoryBytes / telemetry.memoryTotalBytes * 100).toFixed(1)}% of RAM`
+                              : "RAM share unavailable"}
+                          </small>
+                        </td>
                         <td className="process-action-cell">
                           <div className="process-row-actions">
                           <button

@@ -1664,6 +1664,22 @@ h1 {
   white-space: nowrap;
 }
 
+.process-memory-cell strong,
+.process-memory-cell small {
+  display: block;
+}
+
+.process-memory-cell strong {
+  color: #dce4ed;
+  font-weight: 500;
+}
+
+.process-memory-cell small {
+  margin-top: 3px;
+  color: #788593;
+  font-size: 9px;
+}
+
 .process-message {
   display: grid;
   min-height: 220px;

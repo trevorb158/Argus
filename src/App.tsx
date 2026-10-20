@@ -37,6 +37,18 @@ type StartupAppSnapshot = {
 
 type StartupActionStatus = { kind: "success" | "error"; message: string };
 
+type ServiceSnapshot = {
+  unit: string;
+  description: string;
+  scope: "System" | "User";
+  activeState: string;
+  subState: string;
+  startupState: string;
+};
+
+type ServiceInventory = { services: ServiceSnapshot[]; warnings: string[] };
+type ServiceFilter = "all" | "active" | "failed" | "enabled";
+
 type DriveSnapshot = {
   name: string;
   mountPoint: string;
@@ -70,7 +82,7 @@ type ProcessSnapshot = {
 
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
 
-type AppPage = "overview" | "processes" | "storage" | "network" | "startup";
+type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 
@@ -133,6 +145,14 @@ function App() {
   const [startupActionId, setStartupActionId] = useState<string | null>(null);
   const [startupActionStatus, setStartupActionStatus] =
     useState<StartupActionStatus | null>(null);
+  const [services, setServices] = useState<ServiceSnapshot[]>([]);
+  const [serviceWarnings, setServiceWarnings] = useState<string[]>([]);
+  const [serviceError, setServiceError] = useState<string | null>(null);
+  const [serviceLoading, setServiceLoading] = useState(false);
+  const [serviceQuery, setServiceQuery] = useState("");
+  const [serviceFilter, setServiceFilter] = useState<ServiceFilter>("all");
+  const [serviceVisibleCount, setServiceVisibleCount] = useState(60);
+  const [serviceRefreshKey, setServiceRefreshKey] = useState(0);
   const previousNetworkCounters = useRef<Record<string, {
     receivedBytes: number;
     transmittedBytes: number;
@@ -293,6 +313,35 @@ function App() {
       window.clearTimeout(timeoutId);
     };
   }, [page]);
+
+  useEffect(() => {
+    if (page !== "services") return;
+
+    let active = true;
+    setServiceLoading(true);
+    invoke<ServiceInventory>("get_services")
+      .then((inventory) => {
+        if (active) {
+          setServices(inventory.services);
+          setServiceWarnings(inventory.warnings);
+          setServiceError(null);
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setServices([]);
+          setServiceWarnings([]);
+          setServiceError(String(error));
+        }
+      })
+      .finally(() => {
+        if (active) setServiceLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [page, serviceRefreshKey]);
 
   useEffect(() => {
     if (page !== "startup") return;
@@ -499,6 +548,20 @@ function App() {
     })
     .sort((a, b) => a.mountPoint.localeCompare(b.mountPoint));
 
+  const filteredServices = services.filter((service) => {
+    const query = serviceQuery.trim().toLocaleLowerCase();
+    const matchesQuery = !query ||
+      service.unit.toLocaleLowerCase().includes(query) ||
+      service.description.toLocaleLowerCase().includes(query) ||
+      service.scope.toLocaleLowerCase().includes(query);
+    const matchesFilter = serviceFilter === "all" ||
+      (serviceFilter === "active" && service.activeState === "active") ||
+      (serviceFilter === "failed" && service.activeState === "failed") ||
+      (serviceFilter === "enabled" && service.startupState.startsWith("enabled"));
+    return matchesQuery && matchesFilter;
+  });
+  const visibleServices = filteredServices.slice(0, serviceVisibleCount);
+
   const filteredStartupApps = startupApps.filter((startupApp) => {
     const query = startupQuery.trim().toLocaleLowerCase();
     return (
@@ -674,6 +737,13 @@ function App() {
           >
             <span>◷</span> Startup
           </button>
+          <button
+            className={`nav-item${page === "services" ? " active" : ""}`}
+            aria-current={page === "services" ? "page" : undefined}
+            onClick={() => setPage("services")}
+          >
+            <span>⚙</span> Services
+          </button>
           <button className="nav-item upcoming" disabled title="Coming later">
             <span>⚙</span> Settings <small>SOON</small>
           </button>
@@ -706,9 +776,11 @@ function App() {
                     ? "DISKS AND VOLUMES"
                     : page === "network"
                       ? "NETWORK INTERFACES"
-                      : "LOGIN APPLICATIONS"}
+                      : page === "startup"
+                        ? "LOGIN APPLICATIONS"
+                        : "BACKGROUND SERVICES"}
             </p>
-            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : "Startup"}</h1>
+            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : "Services"}</h1>
             <p className="subheading">
               {page === "overview"
                 ? "A clear view of your workstation, at a glance."
@@ -718,7 +790,9 @@ function App() {
                     ? "Review mounted volumes and how their space is being used."
                     : page === "network"
                       ? "See live traffic and addresses for this device’s network interfaces."
-                      : "Review applications configured to start when you sign in."}
+                      : page === "startup"
+                        ? "Review applications configured to start when you sign in."
+                        : "Review service activity and its configured startup mode."}
             </p>
           </div>
           <div className="refresh-state">
@@ -738,9 +812,13 @@ function App() {
                         ? networkError
                           ? "status-dot muted"
                           : "status-dot"
-                        : startupError
-                          ? "status-dot muted"
-                          : "status-dot"
+                        : page === "startup"
+                          ? startupError
+                            ? "status-dot muted"
+                            : "status-dot"
+                          : serviceError
+                            ? "status-dot muted"
+                            : "status-dot"
               }
             />
             {page === "overview"
@@ -761,11 +839,17 @@ function App() {
                       : networkLoading
                         ? "Reading interfaces"
                         : `${networkInterfaces.length} interfaces`
-                    : startupError
-                      ? "Startup information unavailable"
-                      : startupLoading
-                        ? "Reading startup entries"
-                        : `${startupApps.filter((startupApp) => startupApp.enabled).length} enabled entries`}
+                      : page === "startup"
+                        ? startupError
+                          ? "Startup information unavailable"
+                          : startupLoading
+                            ? "Reading startup entries"
+                            : `${startupApps.filter((startupApp) => startupApp.enabled).length} enabled entries`
+                        : serviceError
+                          ? "Service information unavailable"
+                          : serviceLoading
+                            ? "Reading services"
+                            : `${services.length} services`}
           </div>
         </section>
 
@@ -1246,7 +1330,7 @@ function App() {
               Traffic rates are calculated from local interface counters. Combined rates exclude loopback; virtual interfaces can overlap with physical-interface counters. Kestrel does not inspect websites, connections, or network contents.
             </p>
           </section>
-        ) : (
+        ) : page === "startup" ? (
           <section className="startup-page" aria-labelledby="startup-page-title">
             <div className="startup-toolbar">
               <div>
@@ -1331,7 +1415,95 @@ function App() {
               </div>
             )}
             <p className="startup-footnote">
-This list comes from local XDG autostart entries. You can enable or disable user entries with a launch command; system-managed entries stay read-only. Changes apply at the next sign-in. Desktop-session rules can also affect whether an entry runs.
+              This list comes from local XDG autostart entries. You can enable or disable user entries with a launch command; system-managed entries stay read-only. Changes apply at the next sign-in. Desktop-session rules can also affect whether an entry runs.
+            </p>
+          </section>
+        ) : (
+          <section className="services-page" aria-labelledby="services-page-title">
+            <div className="services-toolbar">
+              <div>
+                <h2 id="services-page-title">System and user services</h2>
+                <p>{serviceLoading && services.length === 0 ? "Reading service managers…" : `${filteredServices.length} of ${services.length} services · read-only view`}</p>
+              </div>
+              <div className="services-toolbar-actions">
+                <label className="services-search">
+                  <span className="sr-only">Search services</span>
+                  <span aria-hidden="true">⌕</span>
+                  <input
+                    type="search"
+                    value={serviceQuery}
+                    onChange={(event) => {
+                      setServiceQuery(event.target.value);
+                      setServiceVisibleCount(60);
+                    }}
+                    placeholder="Search unit or description…"
+                  />
+                </label>
+                <select
+                  className="services-filter"
+                  aria-label="Filter services"
+                  value={serviceFilter}
+                  onChange={(event) => {
+                    setServiceFilter(event.target.value as ServiceFilter);
+                    setServiceVisibleCount(60);
+                  }}
+                >
+                  <option value="all">All states</option>
+                  <option value="active">Active</option>
+                  <option value="failed">Failed</option>
+                  <option value="enabled">Enabled at boot</option>
+                </select>
+                <button
+                  className="startup-refresh-button"
+                  disabled={serviceLoading}
+                  onClick={() => setServiceRefreshKey((key) => key + 1)}
+                >
+                  {serviceLoading ? "Reading…" : "Refresh"}
+                </button>
+              </div>
+            </div>
+
+            {serviceWarnings.length > 0 && (
+              <div className="service-warning" role="status">
+                {serviceWarnings.join(" ")}
+              </div>
+            )}
+            {serviceError ? (
+              <div className="storage-message" role="alert">Could not read services: {serviceError}</div>
+            ) : serviceLoading && services.length === 0 ? (
+              <div className="storage-message" role="status">Reading local systemd service information…</div>
+            ) : filteredServices.length === 0 ? (
+              <div className="storage-message" role="status">
+                {services.length === 0 ? "No services were reported by the available service managers." : "No services match your search and filter."}
+              </div>
+            ) : (
+              <div className="service-list">
+                {visibleServices.map((service) => (
+                  <article className="service-entry" key={`${service.scope}:${service.unit}`}>
+                    <div className="service-entry-main">
+                      <h3>{service.unit}</h3>
+                      <p>{service.description}</p>
+                    </div>
+                    <span className={`service-active-state ${service.activeState}`}>
+                      <span className="service-state-dot" />
+                      {service.activeState}{service.subState && service.subState !== service.activeState ? ` · ${service.subState}` : ""}
+                    </span>
+                    <span className="service-startup-state">{service.startupState}</span>
+                    <span className={`service-scope${service.scope === "User" ? " user" : ""}`}>{service.scope}</span>
+                  </article>
+                ))}
+              </div>
+            )}
+            {visibleServices.length < filteredServices.length && (
+              <button
+                className="service-show-more"
+                onClick={() => setServiceVisibleCount((count) => count + 60)}
+              >
+                Show more services ({filteredServices.length - visibleServices.length} remaining)
+              </button>
+            )}
+            <p className="service-footnote">
+              Service status and startup modes come from the systemd system and user managers. This page is read-only; Kestrel will use a separate, permission-aware flow before offering service controls.
             </p>
           </section>
         )}

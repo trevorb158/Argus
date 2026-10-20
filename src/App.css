@@ -871,6 +871,212 @@ h1 {
   line-height: 1.55;
 }
 
+.services-page {
+  margin-top: 0;
+  padding: 20px;
+  border: 1px solid #252d37;
+  border-radius: 11px;
+  background: linear-gradient(145deg, rgba(22, 28, 36, 0.96), rgba(16, 21, 28, 0.96));
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.12);
+}
+
+.services-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.services-toolbar h2 {
+  margin: 0 0 5px;
+  color: #e4eaf1;
+  font-size: 15px;
+}
+
+.services-toolbar p {
+  margin: 0;
+  color: #788593;
+  font-size: 10px;
+}
+
+.services-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.services-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(250px, 25vw);
+  padding: 0 10px;
+  border: 1px solid #29313b;
+  border-radius: 7px;
+  background: #0e1319;
+  color: #7f8b98;
+}
+
+.services-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #e8edf5;
+  font: inherit;
+  font-size: 10px;
+}
+
+.services-search:focus-within {
+  border-color: #54b89d;
+  box-shadow: 0 0 0 2px rgba(84, 184, 157, 0.12);
+}
+
+.services-filter {
+  max-width: 150px;
+  padding: 9px 8px;
+  border: 1px solid #29313b;
+  border-radius: 7px;
+  background: #11171f;
+  color: #aeb8c4;
+  font: inherit;
+  font-size: 10px;
+}
+
+.service-warning {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #443d2e;
+  border-radius: 7px;
+  background: #211f19;
+  color: #d5c18f;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.service-list {
+  max-height: min(62vh, 680px);
+  overflow: auto;
+  border: 1px solid #252d37;
+  border-radius: 8px;
+  background: #11171f;
+}
+
+.service-show-more {
+  display: block;
+  margin: 12px auto 0;
+  padding: 8px 12px;
+  border: 1px solid #35404b;
+  border-radius: 7px;
+  background: #171e26;
+  color: #88d7bd;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.service-show-more:hover {
+  border-color: #54b89d;
+  background: #1b2828;
+}
+
+.service-entry {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) 130px 130px 70px;
+  align-items: center;
+  gap: 13px;
+  padding: 11px 14px;
+  border-bottom: 1px solid #202832;
+}
+
+.service-entry:last-child {
+  border-bottom: 0;
+}
+
+.service-entry:hover {
+  background: rgba(97, 211, 176, 0.035);
+}
+
+.service-entry-main {
+  min-width: 0;
+}
+
+.service-entry-main h3 {
+  overflow: hidden;
+  margin: 0 0 4px;
+  color: #d5dde6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-entry-main p {
+  overflow: hidden;
+  margin: 0;
+  color: #788593;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-active-state,
+.service-startup-state,
+.service-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 5px 7px;
+  border: 1px solid #35404b;
+  border-radius: 6px;
+  background: #1a2028;
+  color: #aeb8c4;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-active-state.active {
+  border-color: #304039;
+  background: #17231f;
+  color: #9addc6;
+}
+
+.service-active-state.failed {
+  border-color: #52363a;
+  background: #251a1c;
+  color: #edb2ae;
+}
+
+.service-state-dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.service-scope.user {
+  border-color: #343b4b;
+  background: #1b202a;
+  color: #a7b7e3;
+}
+
+.service-footnote {
+  margin: 15px 0 0;
+  color: #707d8b;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
 .startup-page {
   margin-top: 0;
   padding: 20px;
@@ -1573,6 +1779,24 @@ h1 {
 }
 
 @media (max-width: 700px) {
+  .services-toolbar,
+  .services-toolbar-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .services-search {
+    width: 100%;
+  }
+
+  .service-entry {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+  }
+
+  .service-entry-main {
+    grid-column: 1 / -1;
+  }
   .startup-toolbar,
   .startup-toolbar-actions {
     align-items: stretch;

@@ -37,6 +37,24 @@ struct DriveSnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ServiceSnapshot {
+    unit: String,
+    description: String,
+    scope: String,
+    active_state: String,
+    sub_state: String,
+    startup_state: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceInventory {
+    services: Vec<ServiceSnapshot>,
+    warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct StartupAppSnapshot {
     id: String,
     name: String,
@@ -223,6 +241,110 @@ fn read_autostart_directory(
         }
     }
     Ok(())
+}
+
+fn run_systemctl(user_scope: bool, args: &[&str]) -> Result<String, String> {
+    let mut command = Command::new("systemctl");
+    if user_scope {
+        command.arg("--user");
+    }
+    let output = command
+        .args(args)
+        .output()
+        .map_err(|error| format!("Could not start systemctl: {error}"))?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if error.is_empty() {
+            format!("systemctl exited with status {}", output.status)
+        } else {
+            error
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn query_service_scope(user_scope: bool, scope: &str) -> Result<Vec<ServiceSnapshot>, String> {
+    let active_units = run_systemctl(
+        user_scope,
+        &["list-units", "--type=service", "--all", "--no-legend", "--plain", "--no-pager"],
+    )?;
+    let unit_files = run_systemctl(
+        user_scope,
+        &["list-unit-files", "--type=service", "--no-legend", "--no-pager"],
+    )?;
+    let mut services = BTreeMap::<String, ServiceSnapshot>::new();
+
+    for line in active_units.lines() {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 4 {
+            continue;
+        }
+        let unit = fields[0].to_string();
+        let key = format!("{scope}:{unit}");
+        services.insert(key, ServiceSnapshot {
+            unit,
+            description: fields[4..].join(" "),
+            scope: scope.to_string(),
+            active_state: fields[2].to_string(),
+            sub_state: fields[3].to_string(),
+            startup_state: "unknown".to_string(),
+        });
+    }
+
+    for line in unit_files.lines() {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 2 {
+            continue;
+        }
+        let unit = fields[0].to_string();
+        let key = format!("{scope}:{unit}");
+        let service = services.entry(key).or_insert_with(|| ServiceSnapshot {
+            unit: unit.clone(),
+            description: unit.clone(),
+            scope: scope.to_string(),
+            active_state: "inactive".to_string(),
+            sub_state: "dead".to_string(),
+            startup_state: "unknown".to_string(),
+        });
+        service.startup_state = fields[1].to_string();
+    }
+
+    Ok(services.into_values().collect())
+}
+
+#[tauri::command]
+fn get_services() -> Result<ServiceInventory, String> {
+    let (system, user) = std::thread::scope(|scope| {
+        let system = scope.spawn(|| query_service_scope(false, "System"));
+        let user = scope.spawn(|| query_service_scope(true, "User"));
+        (system.join(), user.join())
+    });
+    let system = system.map_err(|_| "System service query failed unexpectedly".to_string())?;
+    let user = user.map_err(|_| "User service query failed unexpectedly".to_string())?;
+    let mut warnings = Vec::new();
+    let mut services = Vec::new();
+    let mut available_scopes = 0;
+
+    match system {
+        Ok(mut entries) => {
+            available_scopes += 1;
+            services.append(&mut entries);
+        }
+        Err(error) => warnings.push(format!("System services unavailable: {error}")),
+    }
+    match user {
+        Ok(mut entries) => {
+            available_scopes += 1;
+            services.append(&mut entries);
+        }
+        Err(error) => warnings.push(format!("User services unavailable: {error}")),
+    }
+
+    if available_scopes == 0 {
+        return Err(warnings.join(" "));
+    }
+    services.sort_by(|a, b| a.scope.cmp(&b.scope).then_with(|| a.unit.cmp(&b.unit)));
+    Ok(ServiceInventory { services, warnings })
 }
 
 fn user_config_directory() -> Option<PathBuf> {
@@ -557,6 +679,7 @@ pub fn run() {
             get_temperatures,
             get_network_interfaces,
             get_startup_apps,
+            get_services,
             set_startup_enabled,
             get_storage,
             get_partitions,

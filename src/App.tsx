@@ -20,9 +20,12 @@ type DriveSnapshot = {
 type ProcessSnapshot = {
   pid: number;
   name: string;
+  startTime: number;
   cpuUsagePercent: number;
   memoryBytes: number;
 };
+
+type ProcessActionStatus = { kind: "success" | "error"; message: string };
 
 type AppPage = "overview" | "processes" | "storage";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
@@ -62,6 +65,9 @@ function App() {
     key: "cpu",
     direction: "desc",
   });
+  const [terminatingPid, setTerminatingPid] = useState<number | null>(null);
+  const [processActionStatus, setProcessActionStatus] =
+    useState<ProcessActionStatus | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -267,6 +273,35 @@ function App() {
       direction:
         current.key === key && current.direction === "desc" ? "asc" : "desc",
     }));
+  }
+
+  async function requestProcessEnd(process: ProcessSnapshot) {
+    const name = process.name || "Unnamed process";
+    const confirmed = window.confirm(
+      `End ${name} (PID ${process.pid})?\n\nKestrel will request normal termination. Unsaved work in this process may be lost.`,
+    );
+    if (!confirmed) return;
+
+    setTerminatingPid(process.pid);
+    setProcessActionStatus(null);
+    try {
+      await invoke("terminate_process", {
+        pid: process.pid,
+        expectedName: process.name,
+        expectedStartTime: process.startTime,
+      });
+      setProcessActionStatus({
+        kind: "success",
+        message: `Termination requested for ${name} (PID ${process.pid}). It may take a moment to exit.`,
+      });
+    } catch (error) {
+      setProcessActionStatus({
+        kind: "error",
+        message: `Could not end ${name} (PID ${process.pid}): ${String(error)}`,
+      });
+    } finally {
+      setTerminatingPid(null);
+    }
   }
 
   const statusText = telemetryError
@@ -570,6 +605,15 @@ function App() {
               </label>
             </div>
 
+            {processActionStatus && (
+              <div
+                className={`process-action-message ${processActionStatus.kind}`}
+                role={processActionStatus.kind === "error" ? "alert" : "status"}
+              >
+                {processActionStatus.message}
+              </div>
+            )}
+
             {processError ? (
               <div className="process-message" role="alert">
                 Could not read the process list: {processError}
@@ -599,6 +643,7 @@ function App() {
                       <th aria-sort={processSort.key === "memory" ? `${processSort.direction}ending` : "none"}>
                         <button onClick={() => sortProcesses("memory")}>Memory <span>↕</span></button>
                       </th>
+                      <th className="process-action-heading">Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -610,6 +655,16 @@ function App() {
                         <td className="process-number">{process.pid}</td>
                         <td className="process-number">{process.cpuUsagePercent.toFixed(1)}%</td>
                         <td className="process-number">{formatProcessMemory(process.memoryBytes)}</td>
+                        <td className="process-action-cell">
+                          <button
+                            className="process-end-button"
+                            onClick={() => void requestProcessEnd(process)}
+                            disabled={terminatingPid === process.pid}
+                            aria-label={`End ${process.name || "unnamed process"}, PID ${process.pid}`}
+                          >
+                            {terminatingPid === process.pid ? "Sending…" : "End"}
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -617,7 +672,7 @@ function App() {
               </div>
             )}
             <p className="process-footnote">
-              Process information is read-only. Some system processes may show limited details due to operating-system permissions.
+              Ending a process requests normal termination. Unsaved work may be lost, and protected system processes may reject the request. Kestrel will not force-stop a process.
             </p>
           </section>
         ) : (

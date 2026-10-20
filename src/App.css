@@ -906,6 +906,54 @@ h1 {
   text-align: center;
 }
 
+.process-action-heading {
+  width: 92px;
+  text-align: center !important;
+}
+
+.process-action-cell {
+  width: 92px;
+  text-align: center;
+}
+
+.process-end-button {
+  padding: 6px 10px;
+  border: 1px solid #51373a;
+  border-radius: 6px;
+  background: #24191b;
+  color: #e6a2a2;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.process-end-button:hover:not(:disabled) {
+  border-color: #8a4d4d;
+  background: #321f21;
+  color: #ffc0b8;
+}
+
+.process-end-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.process-action-message {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #30473d;
+  border-radius: 7px;
+  background: #15231e;
+  color: #a9e4c9;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.process-action-message.error {
+  border-color: #52363a;
+  background: #251a1c;
+  color: #edb2ae;
+}
+
 .process-footnote {
   margin: 14px 0 0;
   color: #707d8b;
@@ -957,7 +1005,7 @@ h1 {
   }
 
   .process-table {
-    min-width: 580px;
+    min-width: 680px;
   }
 }
 

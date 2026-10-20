@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -1727,6 +1729,20 @@ fn scan_large_files_inner(root: String, minimum_size_bytes: u64) -> Result<Large
     })
 }
 
+#[cfg(target_os = "linux")]
+fn process_identity(pid: u32) -> Option<(u64, String)> {
+    let stat = fs::read(format!("/proc/{pid}/stat")).ok()?;
+    let command_start = stat.iter().position(|byte| *byte == b'(')?;
+    let command_end = stat.iter().rposition(|byte| *byte == b')')?;
+    if command_end <= command_start {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&stat[command_start + 1..command_end]).into_owned();
+    let fields = std::str::from_utf8(&stat[command_end + 1..]).ok()?;
+    let start_ticks = fields.split_whitespace().nth(19)?.parse().ok()?;
+    Some((start_ticks, name))
+}
+
 #[tauri::command]
 fn get_processes(
     state: tauri::State<'_, TelemetryState>,
@@ -1749,19 +1765,71 @@ fn get_processes(
     Ok(system
         .processes()
         .iter()
-        .map(|(pid, process)| ProcessSnapshot {
-            pid: pid.as_u32(),
-            name: process.name().to_string_lossy().into_owned(),
-            start_time: process.start_time(),
-            parent_pid: process.parent().map(|parent| parent.as_u32()),
-            status: format!("{:?}", process.status()),
-            run_time_seconds: process.run_time(),
-            cpu_usage_percent: process.cpu_usage(),
-            memory_bytes: process.memory(),
-            disk_read_total_bytes: process.disk_usage().total_read_bytes,
-            disk_write_total_bytes: process.disk_usage().total_written_bytes,
+        .filter_map(|(pid, process)| {
+            #[cfg(target_os = "linux")]
+            let start_time = process_identity(pid.as_u32())?.0;
+            #[cfg(not(target_os = "linux"))]
+            let start_time = process.start_time();
+            Some(ProcessSnapshot {
+                pid: pid.as_u32(),
+                name: process.name().to_string_lossy().into_owned(),
+                start_time,
+                parent_pid: process.parent().map(|parent| parent.as_u32()),
+                status: format!("{:?}", process.status()),
+                run_time_seconds: process.run_time(),
+                cpu_usage_percent: process.cpu_usage(),
+                memory_bytes: process.memory(),
+                disk_read_total_bytes: process.disk_usage().total_read_bytes,
+                disk_write_total_bytes: process.disk_usage().total_written_bytes,
+            })
         })
         .collect())
+}
+
+#[cfg(target_os = "linux")]
+fn send_process_signal_with_pidfd(
+    pid: u32,
+    expected_name: &str,
+    expected_start_time: u64,
+    signal: Signal,
+) -> Result<(), String> {
+    let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) } as i32;
+    if pidfd < 0 {
+        let error = std::io::Error::last_os_error();
+        return if error.kind() == std::io::ErrorKind::PermissionDenied {
+            Err("Linux did not allow Kestrel to signal this process. It may require higher privileges.".to_string())
+        } else {
+            Err(format!("Linux could not open a stable handle to this process: {error}"))
+        };
+    }
+    let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
+    if process_identity(pid).is_none_or(|(start_time, name)| start_time != expected_start_time || name != expected_name) {
+        return Err("The process changed since the list was refreshed. Review the updated list and try again.".to_string());
+    }
+    let signal_number = match signal {
+        Signal::Term => libc::SIGTERM,
+        Signal::Kill => libc::SIGKILL,
+        _ => return Err("Kestrel only allows normal termination or force stop through this control.".to_string()),
+    };
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            pidfd.as_raw_fd(),
+            signal_number,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            Err("Linux did not allow Kestrel to signal this process. It may require higher privileges.".to_string())
+        } else {
+            Err(format!("Linux could not signal the selected process: {error}"))
+        }
+    }
 }
 
 fn send_process_signal(
@@ -1794,12 +1862,14 @@ fn send_process_signal(
     let process = system
         .process(target_pid)
         .ok_or_else(|| "That process has already exited.".to_string())?;
-    if process.start_time() != expected_start_time
-        || process.name().to_string_lossy() != expected_name
-    {
+    if process.name().to_string_lossy() != expected_name {
         return Err("The process changed since the list was refreshed. Review the updated list and try again.".to_string());
     }
-
+    #[cfg(target_os = "linux")]
+    {
+        return send_process_signal_with_pidfd(pid, &expected_name, expected_start_time, signal);
+    }
+    #[cfg(not(target_os = "linux"))]
     match process.kill_with(signal) {
         Some(true) => Ok(()),
         Some(false) => Err("Linux did not allow Kestrel to signal this process. It may require higher privileges.".to_string()),
@@ -1825,6 +1895,127 @@ fn force_stop_process(
     expected_start_time: u64,
 ) -> Result<(), String> {
     send_process_signal(state, pid, expected_name, expected_start_time, Signal::Kill)
+}
+
+#[cfg(target_os = "linux")]
+fn signal_process_as_authorized_user(
+    pid: u32,
+    expected_name: &str,
+    expected_start_time: u64,
+    caller_pid: u32,
+    signal: Signal,
+) -> Result<(), String> {
+    if pid == 1 {
+        return Err("Kestrel will not signal the system's init process.".to_string());
+    }
+    if pid == caller_pid {
+        return Err("Kestrel will not signal its own desktop process.".to_string());
+    }
+    let status = fs::read_to_string("/proc/self/status")
+        .map_err(|error| format!("Could not verify administrator authorization: {error}"))?;
+    let effective_uid = status.lines()
+        .find_map(|line| line.strip_prefix("Uid:").and_then(|value| value.split_whitespace().nth(1)))
+        .and_then(|value| value.parse::<u32>().ok());
+    if effective_uid != Some(0) {
+        return Err("The helper did not receive administrator privileges.".to_string());
+    }
+
+    send_process_signal_with_pidfd(pid, expected_name, expected_start_time, signal)
+}
+
+#[cfg(target_os = "linux")]
+pub fn handle_privileged_helper_args() -> Option<i32> {
+    let mut args = env::args().skip(1);
+    if args.next().as_deref() != Some("--kestrel-admin-signal") {
+        return None;
+    }
+    let result = (|| -> Result<(), String> {
+        let signal = match args.next().as_deref() {
+            Some("term") => Signal::Term,
+            Some("kill") => Signal::Kill,
+            _ => return Err("The privileged helper received an unsupported signal.".to_string()),
+        };
+        let pid = args.next().and_then(|value| value.parse::<u32>().ok())
+            .ok_or_else(|| "The privileged helper received an invalid process ID.".to_string())?;
+        let expected_name = args.next().ok_or_else(|| "The process name was not provided.".to_string())?;
+        let expected_start_time = args.next().and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| "The process start time was invalid.".to_string())?;
+        let caller_pid = args.next().and_then(|value| value.parse::<u32>().ok())
+            .ok_or_else(|| "The requesting application process ID was invalid.".to_string())?;
+        if args.next().is_some() {
+            return Err("The privileged helper received unexpected arguments.".to_string());
+        }
+        signal_process_as_authorized_user(pid, &expected_name, expected_start_time, caller_pid, signal)
+    })();
+    match result {
+        Ok(()) => Some(0),
+        Err(error) => {
+            eprintln!("Kestrel authorization helper: {error}");
+            Some(1)
+        }
+    }
+}
+
+#[tauri::command]
+async fn signal_process_with_authorization(
+    pid: u32,
+    expected_name: String,
+    expected_start_time: u64,
+    signal: String,
+) -> Result<(), String> {
+    let signal = match signal.as_str() {
+        "term" | "kill" => signal,
+        _ => return Err("Kestrel requested an unsupported process signal.".to_string()),
+    };
+    if pid == 1 || pid == std::process::id() {
+        return Err("Kestrel will not signal PID 1 or itself.".to_string());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            use std::os::unix::fs::MetadataExt;
+            let executable = env::current_exe()
+                .map_err(|error| format!("Could not locate Kestrel for authorization: {error}"))?;
+            let trusted_installation = executable.ancestors().all(|path| {
+                fs::metadata(path).is_ok_and(|metadata| metadata.uid() == 0 && metadata.mode() & 0o022 == 0)
+            });
+            if !trusted_installation {
+                return Err("Administrator retry requires Kestrel to be installed in a root-owned, non-user-writable path. It is unavailable from a development build.".to_string());
+            }
+            let output = Command::new("pkexec")
+                .arg(executable)
+                .args([
+                    "--kestrel-admin-signal",
+                    signal.as_str(),
+                    &pid.to_string(),
+                    expected_name.as_str(),
+                    &expected_start_time.to_string(),
+                    &std::process::id().to_string(),
+                ])
+                .output()
+                .map_err(|error| format!("Could not start the Linux authorization dialog: {error}"))?;
+            if output.status.success() {
+                return Ok(());
+            }
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if output.status.code() == Some(126) {
+                return Err("Administrator authorization was cancelled or denied.".to_string());
+            }
+            Err(if message.is_empty() {
+                format!("The authorized process signal failed (pkexec status {}).", output.status)
+            } else {
+                message
+            })
+        })
+        .await
+        .map_err(|error| format!("The authorization request could not finish: {error}"))?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (pid, expected_name, expected_start_time, signal);
+        Err("Administrator process authorization is available on Linux only.".to_string())
+    }
 }
 
 #[tauri::command]
@@ -2133,7 +2324,8 @@ pub fn run() {
             get_recent_logs,
             get_service_logs,
             terminate_process,
-            force_stop_process
+            force_stop_process,
+            signal_process_with_authorization
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

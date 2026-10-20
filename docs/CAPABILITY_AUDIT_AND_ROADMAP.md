@@ -25,7 +25,7 @@ The following capabilities are present in the code at the audited revision. A li
 |---|---|
 | Overview | Shows current CPU and memory use, a bounded activity history, the highest available temperature, and storage summaries. |
 | Performance | Shows total and per-logical-processor CPU activity, memory and swap use, disk read/write rates, and selectable 5, 15, and 30 minute history. History is in memory. |
-| Processes | Lists processes with CPU, memory, parent, state, runtime, and disk I/O details; supports searching, sorting, state filters, a process tree, normal End, and confirmed Force stop. A process must still match its listed PID, name, and start time before Kestrel signals it. Linux permissions can prevent signaling another account's or a system process. |
+| Processes | Lists processes with CPU, memory, parent, state, runtime, and disk I/O details; supports searching, sorting, state filters, a process tree, normal End, and confirmed Force stop. A process must still match its listed PID, name, and start time before Kestrel signals it. If Linux denies a signal, Kestrel can request administrator authorization after another confirmation and rechecks the target process; this requires a root-owned installed Kestrel binary and is unavailable from development builds. |
 | Storage | Shows mounted-volume usage; discovers partitions and mount points; uses UDisks for user-confirmed mount and unmount; reads cached SMART health via UDisks when available. SMART self-tests, filesystem repair, formatting, partition creation, and partition deletion are not implemented. |
 | Network | Shows local interface addresses and traffic rates, the configured default route, and resolver addresses. It is an observer today: it does not connect/disconnect Wi-Fi, change IP/DNS/routes, or manage firewall rules. |
 | Startup | Lists XDG user and system autostart entries. User entries can be enabled or disabled directly; system defaults can be enabled or disabled for the current account by creating/updating a per-user XDG override. Shared system files are not modified. |
@@ -62,7 +62,7 @@ Some boundaries below are deliberate safety checks. Others are temporary impleme
 
 2. **Shared startup files remain unchanged.** Kestrel can override a system default for the current account using XDG precedence, while leaving `/etc/xdg` and other shared entries untouched. Editing the shared startup entry for all users still needs a narrowly scoped privileged helper, before/after preview, backup, confirmation, authorization, and rollback.
 
-3. **Process signaling has no authorization retry.** Normal End and Force stop use the current process credentials. If Linux denies a signal, Kestrel reports that elevated rights may be needed but cannot request them itself. Add a permission-aware route for an explicitly selected process and show that force stop prevents the app from saving data. Preserve the PID/name/start-time revalidation. Never allow Kestrel to signal itself or PID 1; these are functional invariants, not ordinary user-target controls.
+3. **Process signaling keeps strict target guards.** When Linux denies a signal, Kestrel now offers an extra-confirmed Polkit retry. The helper accepts only normal or force-stop signals, rechecks PID, name, and start time after authorization, and refuses PID 1 and the requesting Kestrel process. It only runs from a root-owned, non-user-writable installed binary; development builds cannot use the privileged retry. These checks protect Kestrel itself and prevent authorizing a stale PID.
 
 4. **Storage excludes important operations.** The backend refuses to unmount active swap and system-critical mounts and has no partition create/delete, filesystem format, repair/check, encryption, or SMART self-test controls. It should support the operations Linux and UDisks permit, with a clear target-device identity, data-loss consequences, dependency checks, authorization, and a strong confirmation (for example, re-entering the device or volume label before formatting). A root filesystem that is actively in use cannot be safely unmounted from the running system; explain the OS constraint and offer a recovery/live-system path instead of pretending a force option can make it safe.
 
@@ -115,7 +115,8 @@ Deliver one tested vertical slice and one Git commit at a time. Update this docu
 - [ ] Improve the preview with exact transaction jobs from systemd where the manager exposes a safe, non-mutating plan.
 - Add per-action scope/risk descriptions, confirmation, Polkit authorization, progress, cancellation where supported, and actionable errors.
 - [x] Add current-account startup overrides for system-provided XDG entries; shared system startup files remain unchanged.
-- [ ] Add shared system startup editing through a narrowly scoped authorization helper, plus an elevated process-signal retry.
+- [ ] Add shared system startup editing through a narrowly scoped authorization helper.
+- [x] Add an extra-confirmed Polkit retry for denied process signals, rechecking target identity in a root-owned helper mode; unavailable from development builds.
 - [x] Add a local operation history for process, service, startup, storage mount, and cache actions, with timestamps and outcomes. It stores at most 250 entries and omits command arguments and error details.
 - [ ] Expand operation history to other mutating features as they are added, and add structured recovery/undo guidance where the operating system supports it.
 - Keep OS impossibilities and Kestrel self-protection as explicit invariants.

@@ -1252,6 +1252,32 @@ function App() {
     }
   }
 
+  async function retryProcessSignalWithAuthorization(process: ProcessSnapshot, signal: "term" | "kill") {
+    const name = process.name || "Unnamed process";
+    const action = signal === "term" ? "End" : "Force stop";
+    const consequence = signal === "kill"
+      ? "This sends an immediate kill signal and may lose unsaved data."
+      : "This requests normal termination and may close the selected process.";
+    const confirmed = window.confirm(
+      `Retry ${action.toLowerCase()} for ${name} (PID ${process.pid}) with administrator authorization?\n\nLinux refused the normal request. Kestrel will request a Polkit authorization dialog and recheck the PID, process name, and start time before sending the signal. ${consequence}`,
+    );
+    if (!confirmed) return;
+
+    try {
+      await invoke("signal_process_with_authorization", {
+        pid: process.pid,
+        expectedName: process.name,
+        expectedStartTime: process.startTime,
+        signal,
+      });
+      setProcessActionStatus({ kind: "success", message: `Administrator-authorized ${action.toLowerCase()} signal sent to ${name} (PID ${process.pid}).` });
+      recordOperation({ category: "Process", action: `${action} process with authorization`, target: `${name} (PID ${process.pid})`, outcome: "success", note: signal === "kill" ? "An administrator-authorized immediate kill signal was sent; unsaved work may be lost." : "An administrator-authorized normal termination signal was sent." });
+    } catch (error) {
+      setProcessActionStatus({ kind: "error", message: `Administrator-authorized ${action.toLowerCase()} failed for ${name} (PID ${process.pid}): ${String(error)}` });
+      recordOperation({ category: "Process", action: `${action} process with authorization`, target: `${name} (PID ${process.pid})`, outcome: "failed", note: "The authorization request was cancelled, denied, unavailable, or the process changed." });
+    }
+  }
+
   async function requestProcessEnd(process: ProcessSnapshot) {
     const name = process.name || "Unnamed process";
     const confirmed = window.confirm(
@@ -1277,7 +1303,10 @@ function App() {
         kind: "error",
         message: `Could not end ${name} (PID ${process.pid}): ${String(error)}`,
       });
-      recordOperation({ category: "Process", action: "End process", target: `${name} (PID ${process.pid})`, outcome: "failed", note: "Linux did not complete the requested termination." });
+      recordOperation({ category: "Process", action: "End process", target: `${name} (PID ${process.pid})`, outcome: "failed", note: "Linux did not complete the non-administrator termination request." });
+      if (String(error).includes("higher privileges")) {
+        await retryProcessSignalWithAuthorization(process, "term");
+      }
     } finally {
       setTerminatingPid(null);
     }
@@ -1303,7 +1332,10 @@ function App() {
       recordOperation({ category: "Process", action: "Force stop process", target: `${name} (PID ${process.pid})`, outcome: "success", note: "An immediate kill signal was sent; unsaved work may be lost." });
     } catch (error) {
       setProcessActionStatus({ kind: "error", message: `Could not force stop ${name} (PID ${process.pid}): ${String(error)}` });
-      recordOperation({ category: "Process", action: "Force stop process", target: `${name} (PID ${process.pid})`, outcome: "failed", note: "Linux did not complete the requested signal." });
+      recordOperation({ category: "Process", action: "Force stop process", target: `${name} (PID ${process.pid})`, outcome: "failed", note: "Linux did not complete the non-administrator force-stop request." });
+      if (String(error).includes("higher privileges")) {
+        await retryProcessSignalWithAuthorization(process, "kill");
+      }
     } finally {
       setTerminatingPid(null);
     }
@@ -2193,7 +2225,7 @@ function App() {
               </div>
             )}
             <p className="process-footnote">
-              Per-process disk rates compare successive Linux I/O counters; protected processes may not report them. Ending a process requests normal termination. Unsaved work may be lost, and protected system processes may reject the request. Force stop sends an immediate kill signal after a separate confirmation, so unsaved work may be lost.
+              Per-process disk rates compare successive Linux I/O counters; protected processes may not report them. End requests normal termination; Force stop sends an immediate kill signal after confirmation. If Linux denies either action, Kestrel can ask for administrator authorization after another confirmation and rechecks the process identity before retrying. Unsaved work may be lost.
             </p>
           </section>
         ) : page === "storage" ? (

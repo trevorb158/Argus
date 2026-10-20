@@ -1501,7 +1501,12 @@ function App() {
                           {process.name || "Unnamed process"}
                         </td>
                         <td className="process-number">{process.pid}</td>
-                        <td className="process-number">{process.cpuUsagePercent.toFixed(1)}%</td>
+                        <td className="process-number process-cpu-cell">
+                          <strong>{process.cpuUsagePercent.toFixed(1)}%</strong>
+                          <span className="process-cpu-meter" aria-label={`${process.cpuUsagePercent.toFixed(1)} percent CPU`}>
+                            <span style={{ width: `${Math.max(0, Math.min(100, process.cpuUsagePercent))}%` }} />
+                          </span>
+                        </td>
                         <td className="process-number process-memory-cell">
                           <strong>{formatProcessMemory(process.memoryBytes)}</strong>
                           <small>

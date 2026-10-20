@@ -8,6 +8,16 @@ type TelemetrySnapshot = {
   memoryUsedBytes: number;
   memoryTotalBytes: number;
 };
+type CoreUsageSnapshot = { name: string; usagePercent: number };
+type PerformanceSnapshot = {
+  cpuUsagePercent: number;
+  cores: CoreUsageSnapshot[];
+  memoryUsedBytes: number;
+  memoryAvailableBytes: number;
+  memoryTotalBytes: number;
+  swapUsedBytes: number;
+  swapTotalBytes: number;
+};
 
 type TemperatureSnapshot = {
   label: string;
@@ -134,7 +144,7 @@ type ProcessSnapshot = {
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
 type TemperatureUnit = "celsius" | "fahrenheit";
 
-type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "maintenance" | "settings";
+type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "maintenance" | "settings" | "performance";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 
@@ -214,6 +224,9 @@ function App() {
   const [history, setHistory] = useState<HistorySample[]>([]);
   const [historyWindow, setHistoryWindow] = useState(readHistoryWindow);
   const [temperatureUnit, setTemperatureUnit] = useState<TemperatureUnit>(readTemperatureUnit);
+  const [performanceSnapshot, setPerformanceSnapshot] = useState<PerformanceSnapshot | null>(null);
+  const [performanceError, setPerformanceError] = useState<string | null>(null);
+  const [performanceLoading, setPerformanceLoading] = useState(false);
   const [drives, setDrives] = useState<DriveSnapshot[]>([]);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [partitions, setPartitions] = useState<PartitionSnapshot[]>([]);
@@ -420,6 +433,37 @@ function App() {
     }
 
     void refreshPartitions();
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "performance") return;
+
+    let active = true;
+    let timeoutId = 0;
+
+    async function refreshPerformance() {
+      setPerformanceLoading(true);
+      try {
+        const snapshot = await invoke<PerformanceSnapshot>("get_performance_snapshot");
+        if (active) {
+          setPerformanceSnapshot(snapshot);
+          setPerformanceError(null);
+        }
+      } catch (error) {
+        if (active) setPerformanceError(String(error));
+      } finally {
+        if (active) {
+          setPerformanceLoading(false);
+          timeoutId = window.setTimeout(() => void refreshPerformance(), 1000);
+        }
+      }
+    }
+
+    void refreshPerformance();
     return () => {
       active = false;
       window.clearTimeout(timeoutId);
@@ -957,6 +1001,13 @@ function App() {
             <span>◫</span> Overview
           </button>
           <button
+            className={`nav-item${page === "performance" ? " active" : ""}`}
+            aria-current={page === "performance" ? "page" : undefined}
+            onClick={() => setPage("performance")}
+          >
+            <span>▥</span> Performance
+          </button>
+          <button
             className={`nav-item${page === "storage" ? " active" : ""}`}
             aria-current={page === "storage" ? "page" : undefined}
             onClick={() => setPage("storage")}
@@ -1058,9 +1109,11 @@ function App() {
                               ? "SUPPORT TOOLS"
                               : page === "maintenance"
                                 ? "STORAGE TOOLS"
-                                : "PREFERENCES"}
+                                : page === "settings"
+                                  ? "PREFERENCES"
+                                  : "LIVE TELEMETRY"}
             </p>
-            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : page === "diagnostics" ? "Diagnostics" : page === "maintenance" ? "Maintenance" : "Settings"}</h1>
+            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : page === "diagnostics" ? "Diagnostics" : page === "maintenance" ? "Maintenance" : page === "settings" ? "Settings" : "Performance"}</h1>
             <p className="subheading">
               {page === "overview"
                 ? "A clear view of your workstation, at a glance."
@@ -1080,7 +1133,9 @@ function App() {
                             ? "Create a local support summary and review it before saving."
                             : page === "maintenance"
                               ? "Review large files and application cache usage without changing anything."
-                              : "Choose how Kestrel displays information on this device."}
+                              : page === "settings"
+                                ? "Choose how Kestrel displays information on this device."
+                                : "Inspect live processor, memory, and swap usage."}
             </p>
           </div>
           <div className="refresh-state">
@@ -1120,7 +1175,11 @@ function App() {
                                   ? largeFileError || cacheError || logError
                                     ? "status-dot muted"
                                     : "status-dot"
-                                  : "status-dot"
+                                  : page === "performance"
+                                    ? performanceError
+                                      ? "status-dot muted"
+                                      : "status-dot"
+                                    : "status-dot"
               }
             />
             {page === "overview"
@@ -1163,7 +1222,15 @@ function App() {
                               ? diagnosticsStatus?.message ?? (diagnosticsLoading ? "Collecting local details" : diagnosticsSnapshot ? "Report ready for review" : "No report collected")
                               : page === "maintenance"
                                 ? largeFileError || cacheError || logError ? "Maintenance scan unavailable" : largeFileLoading || cacheLoading || logLoading ? "Scanning local files" : largeFileScan ? (largeFileScan.files.length + " large files found") : cacheInventory ? (formatProcessMemory(cacheInventory.totalBytes) + " in caches") : logInventory ? "Log sizes inspected" : "No folder scanned"
-                                : "Preferences saved locally"}
+                                : page === "settings"
+                                  ? "Preferences saved locally"
+                                  : performanceError
+                                    ? "Performance information unavailable"
+                                    : performanceSnapshot
+                                    ? performanceSnapshot.cores.length + " logical processors"
+                                    : performanceLoading
+                                      ? "Reading performance"
+                                      : "Performance data unavailable"}
           </div>
         </section>
 
@@ -2085,6 +2152,58 @@ function App() {
               <div className="storage-message" role="status">No diagnostics have been collected. Choose “Collect report” to prepare a preview.</div>
             ) : null}
             <p className="service-footnote">Kestrel does not upload this report. Saving is optional and requires you to choose a file location.</p>
+          </section>
+        ) : page === "performance" ? (
+          <section className="performance-page" aria-labelledby="performance-page-title">
+            <div className="performance-page-heading">
+              <div>
+                <h2 id="performance-page-title">Live resource usage</h2>
+                <p>Readings refresh every second while this page is open.</p>
+              </div>
+            </div>
+            {performanceError ? (
+              <div className="storage-message" role="alert">Could not read performance data: {performanceError}</div>
+            ) : !performanceSnapshot ? (
+              <div className="storage-message" role="status">Reading processor and memory usage…</div>
+            ) : (
+              <>
+                <div className="performance-summary-grid">
+                  <article className="performance-summary-card">
+                    <span className="system-info-label">TOTAL CPU USAGE</span>
+                    <strong>{Math.round(performanceSnapshot.cpuUsagePercent)}%</strong>
+                    <div className="performance-meter"><span className="cpu" style={{ width: Math.max(0, Math.min(100, performanceSnapshot.cpuUsagePercent)) + "%" }} /></div>
+                  </article>
+                  <article className="performance-summary-card">
+                    <span className="system-info-label">MEMORY</span>
+                    <strong>{formatProcessMemory(performanceSnapshot.memoryUsedBytes)} <small>of {formatProcessMemory(performanceSnapshot.memoryTotalBytes)}</small></strong>
+                    <div className="performance-meter"><span className="memory" style={{ width: performanceSnapshot.memoryTotalBytes > 0 ? Math.max(0, Math.min(100, (performanceSnapshot.memoryUsedBytes / performanceSnapshot.memoryTotalBytes) * 100)) + "%" : "0%" }} /></div>
+                    <small>{formatProcessMemory(performanceSnapshot.memoryAvailableBytes)} available</small>
+                  </article>
+                  <article className="performance-summary-card">
+                    <span className="system-info-label">SWAP</span>
+                    <strong>{performanceSnapshot.swapTotalBytes > 0 ? formatProcessMemory(performanceSnapshot.swapUsedBytes) + " of " + formatProcessMemory(performanceSnapshot.swapTotalBytes) : "Not configured"}</strong>
+                    {performanceSnapshot.swapTotalBytes > 0 && (
+                      <div className="performance-meter"><span className="swap" style={{ width: Math.max(0, Math.min(100, (performanceSnapshot.swapUsedBytes / performanceSnapshot.swapTotalBytes) * 100)) + "%" }} /></div>
+                    )}
+                    <small>{performanceSnapshot.swapTotalBytes > 0 ? "Virtual memory in use" : "No swap space is available"}</small>
+                  </article>
+                </div>
+                <div className="performance-cores">
+                  <div className="performance-cores-heading">
+                    <h2>Logical processor usage</h2>
+                    <span>{performanceSnapshot.cores.length} processors</span>
+                  </div>
+                  <div className="performance-core-grid">
+                    {performanceSnapshot.cores.map((core) => (
+                      <article className="performance-core-card" key={core.name}>
+                        <div><strong>{core.name}</strong><span>{Math.round(core.usagePercent)}%</span></div>
+                        <div className="performance-meter"><span className={core.usagePercent >= 90 ? "high" : "cpu"} style={{ width: Math.max(0, Math.min(100, core.usagePercent)) + "%" }} /></div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </section>
         ) : (
           <section className="settings-page" aria-labelledby="settings-page-title">

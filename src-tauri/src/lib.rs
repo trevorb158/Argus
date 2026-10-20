@@ -12,6 +12,25 @@ use sysinfo::{Components, Disks, Networks, Pid, ProcessRefreshKind, ProcessesToU
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct CoreUsageSnapshot {
+    name: String,
+    usage_percent: f32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PerformanceSnapshot {
+    cpu_usage_percent: f32,
+    cores: Vec<CoreUsageSnapshot>,
+    memory_used_bytes: u64,
+    memory_available_bytes: u64,
+    memory_total_bytes: u64,
+    swap_used_bytes: u64,
+    swap_total_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TelemetrySnapshot {
     cpu_usage_percent: f32,
     memory_used_bytes: u64,
@@ -268,6 +287,37 @@ fn get_telemetry(
         cpu_usage_percent: system.global_cpu_usage(),
         memory_used_bytes: system.used_memory(),
         memory_total_bytes: system.total_memory(),
+    })
+}
+
+#[tauri::command]
+fn get_performance_snapshot(
+    state: tauri::State<'_, TelemetryState>,
+) -> Result<PerformanceSnapshot, String> {
+    let mut system = state
+        .0
+        .lock()
+        .map_err(|_| "Performance information is unavailable".to_string())?;
+    system.refresh_cpu_usage();
+    system.refresh_memory();
+    let cores = system
+        .cpus()
+        .iter()
+        .enumerate()
+        .map(|(index, cpu)| CoreUsageSnapshot {
+            name: format!("CPU {}", index + 1),
+            usage_percent: cpu.cpu_usage(),
+        })
+        .collect();
+
+    Ok(PerformanceSnapshot {
+        cpu_usage_percent: system.global_cpu_usage(),
+        cores,
+        memory_used_bytes: system.used_memory(),
+        memory_available_bytes: system.available_memory(),
+        memory_total_bytes: system.total_memory(),
+        swap_used_bytes: system.used_swap(),
+        swap_total_bytes: system.total_swap(),
     })
 }
 
@@ -1280,6 +1330,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_telemetry,
             get_system_info,
+            get_performance_snapshot,
             get_diagnostics_snapshot,
             save_diagnostics_report,
             get_temperatures,

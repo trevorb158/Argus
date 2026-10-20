@@ -299,6 +299,10 @@ function App() {
   const [serviceRefreshKey, setServiceRefreshKey] = useState(0);
   const [serviceActionUnit, setServiceActionUnit] = useState<string | null>(null);
   const [serviceActionStatus, setServiceActionStatus] = useState<StartupActionStatus | null>(null);
+  const [serviceLogTarget, setServiceLogTarget] = useState<ServiceSnapshot | null>(null);
+  const [serviceLogs, setServiceLogs] = useState<SystemLogEntry[]>([]);
+  const [serviceLogsLoading, setServiceLogsLoading] = useState(false);
+  const [serviceLogsError, setServiceLogsError] = useState<string | null>(null);
   const [systemInfo, setSystemInfo] = useState<SystemInfoSnapshot | null>(null);
   const [systemInfoError, setSystemInfoError] = useState<string | null>(null);
   const [systemInfoLoading, setSystemInfoLoading] = useState(false);
@@ -1146,6 +1150,21 @@ function App() {
       setServiceActionStatus({ kind: "error", message: `Could not ${action} ${service.unit}: ${String(error)}` });
     } finally {
       setServiceActionUnit(null);
+    }
+  }
+
+  async function showServiceLogs(service: ServiceSnapshot) {
+    setServiceLogTarget(service);
+    setServiceLogs([]);
+    setServiceLogsError(null);
+    setServiceLogsLoading(true);
+    try {
+      const entries = await invoke<SystemLogEntry[]>("get_service_logs", { scope: service.scope, unit: service.unit });
+      setServiceLogs(entries);
+    } catch (error) {
+      setServiceLogsError(String(error));
+    } finally {
+      setServiceLogsLoading(false);
     }
   }
 
@@ -2378,6 +2397,9 @@ function App() {
                     <div className="service-entry-main">
                       <h3>{service.unit}</h3>
                       <p>{service.description}</p>
+                      <button className="service-log-button" type="button" onClick={() => void showServiceLogs(service)}>
+                        {serviceLogTarget?.scope === service.scope && serviceLogTarget.unit === service.unit ? "Refresh logs" : "View recent logs"}
+                      </button>
                     </div>
                     <span className={`service-active-state ${service.activeState}`}>
                       <span className="service-state-dot" />
@@ -2412,6 +2434,39 @@ function App() {
                   </article>
                 ))}
               </div>
+            )}
+            {serviceLogTarget && (
+              <section className="service-logs-panel" aria-live="polite" aria-labelledby="service-logs-title">
+                <div className="service-logs-heading">
+                  <div>
+                    <h2 id="service-logs-title">Recent logs · {serviceLogTarget.unit}</h2>
+                    <p>{serviceLogTarget.scope} service · latest 100 journal entries</p>
+                  </div>
+                  <button className="startup-refresh-button" disabled={serviceLogsLoading} onClick={() => void showServiceLogs(serviceLogTarget)}>
+                    {serviceLogsLoading ? "Reading…" : "Refresh logs"}
+                  </button>
+                </div>
+                {serviceLogsError ? (
+                  <div className="storage-message" role="alert">Could not read service logs: {serviceLogsError}</div>
+                ) : serviceLogsLoading ? (
+                  <div className="storage-message" role="status">Reading recent journal entries…</div>
+                ) : serviceLogs.length === 0 ? (
+                  <div className="storage-message" role="status">No journal entries were found for this service.</div>
+                ) : (
+                  <div className="logs-list service-logs-list">
+                    {serviceLogs.map((entry, index) => (
+                      <article className={`log-entry severity-${entry.severity.toLocaleLowerCase()}`} key={`${entry.timestampMicros}-${index}`}>
+                        <div className="log-entry-meta">
+                          <time>{entry.timestampMicros ? new Date(entry.timestampMicros / 1000).toLocaleString() : "Time unavailable"}</time>
+                          <strong>{entry.source}</strong>
+                          <span className="log-severity">{entry.severity}</span>
+                        </div>
+                        <p>{entry.message}</p>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
             )}
             {visibleServices.length < filteredServices.length && (
               <button

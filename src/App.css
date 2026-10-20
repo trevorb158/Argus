@@ -1190,6 +1190,54 @@ h1 {
   white-space: nowrap;
 }
 
+.service-log-button {
+  margin-top: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #82d6bc;
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.service-log-button:hover {
+  color: #b6f2df;
+  text-decoration: underline;
+}
+
+.service-logs-panel {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #29323d;
+  border-radius: 8px;
+  background: #11171f;
+}
+
+.service-logs-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.service-logs-heading h2 {
+  margin: 0 0 5px;
+  color: #d5dde6;
+  font-size: 12px;
+}
+
+.service-logs-heading p {
+  margin: 0;
+  color: #788593;
+  font-size: 9px;
+}
+
+.service-logs-list {
+  max-height: 420px;
+}
+
 .service-active-state,
 .service-startup-state,
 .service-scope {

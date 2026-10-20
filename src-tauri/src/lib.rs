@@ -1563,8 +1563,37 @@ fn get_recent_logs() -> Result<Vec<SystemLogEntry>, String> {
         return Err(if message.is_empty() { "Could not read the system journal".to_string() } else { message });
     }
 
+    Ok(parse_journal_entries(&output.stdout))
+}
+
+#[tauri::command]
+fn get_service_logs(scope: String, unit: String) -> Result<Vec<SystemLogEntry>, String> {
+    if !["System", "User"].contains(&scope.as_str())
+        || !unit.ends_with(".service")
+        || unit.starts_with('-')
+        || !unit.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"@._:-".contains(&byte))
+    {
+        return Err("Invalid service log request".to_string());
+    }
+    let unit_arg = format!("--unit={unit}");
+    let mut command = Command::new("journalctl");
+    if scope == "User" {
+        command.arg("--user");
+    }
+    let output = command
+        .args([unit_arg.as_str(), "--lines=100", "--no-pager", "--output=json"])
+        .output()
+        .map_err(|error| format!("Could not start journalctl: {error}"))?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if message.is_empty() { "Could not read this service’s journal entries".to_string() } else { message });
+    }
+    Ok(parse_journal_entries(&output.stdout))
+}
+
+fn parse_journal_entries(output: &[u8]) -> Vec<SystemLogEntry> {
     let mut entries = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in String::from_utf8_lossy(output).lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
         let message = value.get("MESSAGE").and_then(serde_json::Value::as_str).unwrap_or("");
         if message.is_empty() { continue; }
@@ -1594,7 +1623,7 @@ fn get_recent_logs() -> Result<Vec<SystemLogEntry>, String> {
         });
     }
     entries.reverse();
-    Ok(entries)
+    entries
 }
 
 #[tauri::command]
@@ -1825,6 +1854,7 @@ pub fn run() {
             clear_cache_entry,
             get_log_inventory,
             get_recent_logs,
+            get_service_logs,
             terminate_process,
             force_stop_process
         ])

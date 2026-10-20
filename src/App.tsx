@@ -24,6 +24,7 @@ type PerformanceSnapshot = {
 type TemperatureSnapshot = {
   label: string;
   temperatureCelsius: number;
+  criticalCelsius: number | null;
 };
 
 type NetworkCountersSnapshot = {
@@ -155,7 +156,7 @@ type ProcessSnapshot = {
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
 type TemperatureUnit = "celsius" | "fahrenheit";
 
-type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "logs" | "maintenance" | "settings" | "performance";
+type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "logs" | "maintenance" | "settings" | "performance" | "sensors";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 type ProcessStateFilter = "all" | "running" | "sleeping" | "stopped" | "zombie";
@@ -377,7 +378,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (page !== "overview") return;
+    if (page !== "overview" && page !== "sensors") return;
 
     let active = true;
     let timeoutId = 0;
@@ -1226,6 +1227,13 @@ function App() {
             <span>⌕</span> Maintenance
           </button>
           <button
+            className={`nav-item${page === "sensors" ? " active" : ""}`}
+            aria-current={page === "sensors" ? "page" : undefined}
+            onClick={() => setPage("sensors")}
+          >
+            <span>°</span> Sensors
+          </button>
+          <button
             className={`nav-item${page === "settings" ? " active" : ""}`}
             aria-current={page === "settings" ? "page" : undefined}
             onClick={() => setPage("settings")}
@@ -1275,9 +1283,11 @@ function App() {
                                 ? "STORAGE TOOLS"
                                 : page === "settings"
                                   ? "PREFERENCES"
-                                  : "LIVE TELEMETRY"}
+                                  : page === "sensors"
+                                    ? "HARDWARE TEMPERATURES"
+                                    : "LIVE TELEMETRY"}
             </p>
-            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : page === "diagnostics" ? "Diagnostics" : page === "logs" ? "Recent Logs" : page === "maintenance" ? "Maintenance" : page === "settings" ? "Settings" : "Performance"}</h1>
+            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : page === "diagnostics" ? "Diagnostics" : page === "logs" ? "Recent Logs" : page === "maintenance" ? "Maintenance" : page === "settings" ? "Settings" : page === "sensors" ? "Sensors" : "Performance"}</h1>
             <p className="subheading">
               {page === "overview"
                 ? "A clear view of your workstation, at a glance."
@@ -1301,7 +1311,9 @@ function App() {
                               ? "Review large files and application cache usage without changing anything."
                               : page === "settings"
                                 ? "Choose how Kestrel displays information on this device."
-                                : "Inspect live processor, memory, and swap usage."}
+                                : page === "sensors"
+                                  ? "Review temperatures reported by the available hardware sensors."
+                                  : "Inspect live processor, memory, and swap usage."}
             </p>
           </div>
           <div className="refresh-state">
@@ -1347,7 +1359,9 @@ function App() {
                                     ? performanceError
                                       ? "status-dot muted"
                                       : "status-dot"
-                                    : "status-dot"
+                                    : page === "sensors"
+                                      ? temperatureError ? "status-dot muted" : "status-dot"
+                                      : "status-dot"
               }
             />
             {page === "overview"
@@ -1394,6 +1408,8 @@ function App() {
                                 ? largeFileError || cacheError || logError ? "Maintenance scan unavailable" : largeFileLoading || cacheLoading || logLoading ? "Scanning local files" : largeFileScan ? (largeFileScan.files.length + " large files found") : cacheInventory ? (formatProcessMemory(cacheInventory.totalBytes) + " in caches") : logInventory ? "Log sizes inspected" : "No folder scanned"
                                 : page === "settings"
                                   ? "Preferences saved locally"
+                                  : page === "sensors"
+                                    ? temperatureError ? "Sensors unavailable" : temperatureLoading ? "Reading sensors" : `${temperatures.length} sensors`
                                   : performanceError
                                     ? "Performance information unavailable"
                                     : performanceSnapshot
@@ -2444,6 +2460,53 @@ function App() {
             )}
             <p className="service-footnote">Kestrel reads up to 300 entries from the current boot using the local system journal. It does not edit or upload log data.</p>
           </section>
+        ) : page === "sensors" ? (
+          <section className="sensors-page" aria-labelledby="sensors-page-title">
+            <div className="sensors-page-heading">
+              <div>
+                <h2 id="sensors-page-title">Hardware temperatures</h2>
+                <p>Sensor readings refresh every five seconds while this page is open.</p>
+              </div>
+              <span>{temperatures.length} readings</span>
+            </div>
+            {temperatureError ? (
+              <div className="storage-message" role="alert">Could not read hardware sensors: {temperatureError}</div>
+            ) : temperatureLoading && temperatures.length === 0 ? (
+              <div className="storage-message" role="status">Reading hardware sensors…</div>
+            ) : temperatures.length === 0 ? (
+              <div className="storage-message" role="status">No readable temperature sensors were reported by this device.</div>
+            ) : (
+              <div className="sensor-grid">
+                {[...temperatures].sort((a, b) => b.temperatureCelsius - a.temperatureCelsius).map((sensor, index) => {
+                  const value = temperatureUnit === "celsius" ? sensor.temperatureCelsius : sensor.temperatureCelsius * 9 / 5 + 32;
+                  const critical = sensor.criticalCelsius === null ? null : temperatureUnit === "celsius" ? sensor.criticalCelsius : sensor.criticalCelsius * 9 / 5 + 32;
+                  const percentToCritical = sensor.criticalCelsius && sensor.criticalCelsius > 0
+                    ? Math.max(0, Math.min(100, sensor.temperatureCelsius / sensor.criticalCelsius * 100))
+                    : null;
+                  const nearLimit = percentToCritical !== null && percentToCritical >= 85;
+                  return (
+                    <article className={`sensor-card${nearLimit ? " near-limit" : ""}`} key={`${sensor.label}-${index}`}>
+                      <div className="sensor-card-heading">
+                        <span className="sensor-icon" aria-hidden="true">°</span>
+                        <span className="sensor-state">{nearLimit ? "Near reported limit" : "Reading available"}</span>
+                      </div>
+                      <h3>{sensor.label || `Sensor ${index + 1}`}</h3>
+                      <strong className="sensor-value">{Math.round(value)}°{temperatureUnit === "celsius" ? "C" : "F"}</strong>
+                      {percentToCritical !== null ? (
+                        <>
+                          <div className="sensor-meter" aria-label={`${Math.round(percentToCritical)} percent of reported critical temperature`}>
+                            <span style={{ width: `${percentToCritical}%` }} />
+                          </div>
+                          <p>Critical limit reported at {Math.round(critical!)}°{temperatureUnit === "celsius" ? "C" : "F"}</p>
+                        </>
+                      ) : <p>No critical limit reported by this sensor</p>}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+            <p className="service-footnote">Temperatures and critical limits are supplied by the device’s sensor interface. Some hardware does not expose every sensor or limit.</p>
+          </section>
         ) : page === "performance" ? (
           <section className="performance-page" aria-labelledby="performance-page-title">
             <div className="performance-page-heading">
@@ -2518,7 +2581,7 @@ function App() {
               <div className="settings-row">
                 <div>
                   <h3>Temperature units</h3>
-                  <p>Choose how hardware temperatures appear on the Overview.</p>
+                  <p>Choose how hardware temperatures appear on Overview and Sensors.</p>
                 </div>
                 <select
                   aria-label="Temperature units"

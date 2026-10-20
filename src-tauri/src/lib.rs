@@ -95,6 +95,7 @@ struct SystemLogEntry {
 struct TemperatureSnapshot {
     label: String,
     temperature_celsius: f32,
+    critical_celsius: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -839,6 +840,7 @@ fn get_temperatures() -> Vec<TemperatureSnapshot> {
             Some(TemperatureSnapshot {
                 label: component.label().to_string(),
                 temperature_celsius,
+                critical_celsius: component.critical().filter(|value| value.is_finite() && *value > 0.0),
             })
         })
         .collect()

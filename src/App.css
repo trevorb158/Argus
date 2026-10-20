@@ -2873,3 +2873,131 @@ h1 {
     flex-wrap: wrap;
   }
 }
+
+.sensors-page {
+  padding: 20px;
+  border: 1px solid #252d37;
+  border-radius: 11px;
+  background: linear-gradient(145deg, rgba(22, 28, 36, 0.96), rgba(16, 21, 28, 0.96));
+}
+
+.sensors-page-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.sensors-page-heading h2 {
+  margin: 0 0 5px;
+  color: #e4eaf1;
+  font-size: 15px;
+}
+
+.sensors-page-heading p,
+.sensor-card p {
+  margin: 0;
+  color: #788593;
+  font-size: 10px;
+}
+
+.sensors-page-heading > span {
+  color: #8b99a8;
+  font-size: 10px;
+}
+
+.sensor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.sensor-card {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid #29323d;
+  border-radius: 9px;
+  background: #121820;
+}
+
+.sensor-card.near-limit {
+  border-color: #624b35;
+}
+
+.sensor-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sensor-icon {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border: 1px solid #304139;
+  border-radius: 7px;
+  background: #18251f;
+  color: #8be0c2;
+  font-size: 16px;
+}
+
+.sensor-state {
+  color: #819090;
+  font-size: 9px;
+}
+
+.sensor-card.near-limit .sensor-state {
+  color: #e4b274;
+}
+
+.sensor-card h3 {
+  margin: 15px 0 7px;
+  overflow: hidden;
+  color: #aeb8c4;
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sensor-value {
+  display: block;
+  margin-bottom: 12px;
+  color: #e4eaf1;
+  font-size: 25px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.sensor-meter {
+  height: 5px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: #28313b;
+}
+
+.sensor-meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #67d5b2;
+}
+
+.sensor-card.near-limit .sensor-meter span {
+  background: #e0b16a;
+}
+
+@media (max-width: 600px) {
+  .sensors-page-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .sensor-grid {
+    grid-template-columns: 1fr;
+  }
+}

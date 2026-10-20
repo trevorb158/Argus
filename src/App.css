@@ -2424,6 +2424,56 @@ h1 {
   background: linear-gradient(130deg, rgba(26, 47, 46, 0.65), #121820 72%);
 }
 
+.system-info-card.system-info-wide {
+  grid-column: 1 / -1;
+  min-height: 0;
+}
+
+.usb-device-list {
+  display: grid;
+  width: 100%;
+  margin-top: 4px;
+  border-top: 1px solid #252f39;
+}
+
+.usb-device-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 0;
+  border-bottom: 1px solid #252f39;
+}
+
+.usb-device-entry:last-child {
+  border-bottom: 0;
+}
+
+.usb-device-entry > div:first-child,
+.usb-device-metadata {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.usb-device-entry > div:first-child strong {
+  overflow-wrap: anywhere;
+  color: #cbd5df;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.usb-device-entry span {
+  color: #788593;
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
+.usb-device-metadata {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
 .system-info-label {
   color: #8794a2;
   font-size: 9px;
@@ -2463,6 +2513,19 @@ h1 {
 
   .system-info-card.featured {
     grid-column: auto;
+  }
+
+  .system-info-card.system-info-wide {
+    grid-column: auto;
+  }
+
+  .usb-device-entry {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .usb-device-metadata {
+    text-align: left;
   }
 }
 

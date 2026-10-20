@@ -78,6 +78,16 @@ type BatterySnapshot = {
   healthPercent: number | null;
   cycleCount: number | null;
 };
+type UsbDeviceSnapshot = {
+  path: string;
+  manufacturer: string | null;
+  product: string | null;
+  vendorId: string;
+  productId: string;
+  busNumber: string | null;
+  deviceNumber: string | null;
+  speed: string | null;
+};
 type SystemInfoSnapshot = {
   operatingSystem: string;
   kernelVersion: string | null;
@@ -91,6 +101,7 @@ type SystemInfoSnapshot = {
   desktopEnvironment: string | null;
   sessionType: string | null;
   batteries: BatterySnapshot[];
+  usbDevices: UsbDeviceSnapshot[];
 };
 type DiagnosticsSnapshot = Omit<SystemInfoSnapshot, "hostName" | "batteries"> & {
   cpuUsagePercent: number;
@@ -2617,6 +2628,30 @@ function App() {
                     </div>
                   </article>
                 ))}
+                <article className="system-info-card system-info-wide usb-inventory-card">
+                  <span className="system-info-label">USB DEVICES</span>
+                  <strong>{systemInfo.usbDevices.length} detected</strong>
+                  <small>Device names and identifiers reported by Linux. Serial numbers and device contents are not read.</small>
+                  {systemInfo.usbDevices.length > 0 ? (
+                    <div className="usb-device-list">
+                      {systemInfo.usbDevices.map((device) => (
+                        <div className="usb-device-entry" key={device.path}>
+                          <div>
+                            <strong>{device.product ?? "USB device"}</strong>
+                            <span>{device.manufacturer ?? "Manufacturer unavailable"} · {device.path}</span>
+                          </div>
+                          <div className="usb-device-metadata">
+                            <span>ID {device.vendorId}:{device.productId}</span>
+                            <span>{device.speed ? `${device.speed} Mb/s` : "Speed unavailable"}</span>
+                            {device.busNumber && device.deviceNumber && <span>Bus {device.busNumber} · device {device.deviceNumber}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="storage-message" role="status">No USB devices are currently reported by Linux.</div>
+                  )}
+                </article>
               </div>
             )}
             <p className="service-footnote">These details stay on this device. Some values depend on what the kernel and desktop environment make available.</p>

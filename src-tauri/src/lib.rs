@@ -51,6 +51,19 @@ struct BatterySnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct UsbDeviceSnapshot {
+    path: String,
+    manufacturer: Option<String>,
+    product: Option<String>,
+    vendor_id: String,
+    product_id: String,
+    bus_number: Option<String>,
+    device_number: Option<String>,
+    speed: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SystemInfoSnapshot {
     operating_system: String,
     kernel_version: Option<String>,
@@ -64,6 +77,7 @@ struct SystemInfoSnapshot {
     desktop_environment: Option<String>,
     session_type: Option<String>,
     batteries: Vec<BatterySnapshot>,
+    usb_devices: Vec<UsbDeviceSnapshot>,
 }
 
 #[derive(Serialize)]
@@ -437,6 +451,28 @@ fn read_power_supply_value(path: &Path, candidates: &[&str]) -> Option<u64> {
     })
 }
 
+fn read_usb_devices() -> Vec<UsbDeviceSnapshot> {
+    let Ok(entries) = fs::read_dir("/sys/bus/usb/devices") else { return Vec::new() };
+    let mut devices = entries.filter_map(Result::ok).filter_map(|entry| {
+        let path = entry.path();
+        let read = |name: &str| fs::read_to_string(path.join(name)).ok().map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+        let vendor_id = read("idVendor")?;
+        let product_id = read("idProduct")?;
+        Some(UsbDeviceSnapshot {
+            path: entry.file_name().to_string_lossy().into_owned(),
+            manufacturer: read("manufacturer"),
+            product: read("product"),
+            vendor_id,
+            product_id,
+            bus_number: read("busnum"),
+            device_number: read("devnum"),
+            speed: read("speed"),
+        })
+    }).collect::<Vec<_>>();
+    devices.sort_by(|a, b| a.path.cmp(&b.path));
+    devices
+}
+
 #[tauri::command]
 fn get_system_info(state: tauri::State<'_, TelemetryState>) -> Result<SystemInfoSnapshot, String> {
     let system = state
@@ -464,6 +500,7 @@ fn get_system_info(state: tauri::State<'_, TelemetryState>) -> Result<SystemInfo
         desktop_environment: env::var("XDG_CURRENT_DESKTOP").ok().filter(|value| !value.is_empty()),
         session_type: env::var("XDG_SESSION_TYPE").ok().filter(|value| !value.is_empty()),
         batteries: read_battery_status(),
+        usb_devices: read_usb_devices(),
     })
 }
 

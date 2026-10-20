@@ -69,6 +69,13 @@ type ServiceSnapshot = {
 };
 
 type ServiceInventory = { services: ServiceSnapshot[]; warnings: string[] };
+type ServiceActionPreview = {
+  relationship: string;
+  relatedUnits: string[];
+  totalUnits: number;
+  truncated: boolean;
+  note: string;
+};
 type ServiceFilter = "all" | "active" | "failed" | "enabled";
 type BatterySnapshot = {
   name: string;
@@ -373,6 +380,7 @@ function App() {
   const [serviceVisibleCount, setServiceVisibleCount] = useState(60);
   const [serviceRefreshKey, setServiceRefreshKey] = useState(0);
   const [serviceActionUnit, setServiceActionUnit] = useState<string | null>(null);
+  const [serviceActionPhase, setServiceActionPhase] = useState<"preview" | "action">("preview");
   const [serviceActionStatus, setServiceActionStatus] = useState<StartupActionStatus | null>(null);
   const [serviceLogTarget, setServiceLogTarget] = useState<ServiceSnapshot | null>(null);
   const [serviceLogs, setServiceLogs] = useState<SystemLogEntry[]>([]);
@@ -1225,11 +1233,29 @@ function App() {
     if (serviceActionUnit !== null) return;
     const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
     const detail = serviceActionImpact(service, action);
-    if (!window.confirm(`${actionLabel} ${service.scope === "System" ? "system" : "user"} service ${service.unit}?\n\n${detail}\n\nContinue only if you understand this effect.`)) return;
-
     setServiceActionUnit(service.unit);
+    setServiceActionPhase("preview");
     setServiceActionStatus(null);
     try {
+      let relationshipText = "";
+      try {
+        const preview = await invoke<ServiceActionPreview>("get_service_action_preview", {
+          scope: service.scope,
+          unit: service.unit,
+          action,
+        });
+        const listedUnits = preview.relatedUnits.length > 0
+          ? preview.relatedUnits.join("\n  • ")
+          : "No additional related units were listed.";
+        const remaining = preview.truncated ? `\n  • …and ${preview.totalUnits - preview.relatedUnits.length} more` : "";
+        relationshipText = `\n\n${preview.relationship} (${preview.totalUnits} reported):\n  • ${listedUnits}${remaining}\n\n${preview.note}`;
+      } catch (error) {
+        relationshipText = `\n\nKestrel could not inspect service relationships: ${String(error)}. You can still continue, but the possible related-unit list is unavailable.`;
+      }
+
+      if (!window.confirm(`${actionLabel} ${service.scope === "System" ? "system" : "user"} service ${service.unit}?\n\n${detail}${relationshipText}\n\nContinue only if you understand this effect.`)) return;
+
+      setServiceActionPhase("action");
       await invoke("set_service_state", { scope: service.scope, unit: service.unit, action });
       setServiceActionStatus({ kind: "success", message: `${service.unit}: ${actionLabel.toLowerCase()} request completed.` });
       setServiceRefreshKey((key) => key + 1);
@@ -2521,20 +2547,20 @@ function App() {
                     <div className={`service-row-actions${service.scope === "System" ? " system" : ""}`}>
                         {service.activeState === "active" ? (
                           <button className="service-action-button stop" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "stop")}>
-                            {serviceActionUnit === service.unit ? "Working…" : "Stop"}
+                            {serviceActionUnit === service.unit ? (serviceActionPhase === "preview" ? "Checking…" : "Working…") : "Stop"}
                           </button>
                         ) : ["inactive", "failed"].includes(service.activeState) ? (
                           <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "start")}>
-                            {serviceActionUnit === service.unit ? "Working…" : "Start"}
+                            {serviceActionUnit === service.unit ? (serviceActionPhase === "preview" ? "Checking…" : "Working…") : "Start"}
                           </button>
                         ) : null}
                         {service.startupState === "enabled" ? (
                           <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "disable")}>
-                            {serviceActionUnit === service.unit ? "Working…" : "Disable"}
+                            {serviceActionUnit === service.unit ? (serviceActionPhase === "preview" ? "Checking…" : "Working…") : "Disable"}
                           </button>
                         ) : service.startupState === "disabled" ? (
                           <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "enable")}>
-                            {serviceActionUnit === service.unit ? "Working…" : "Enable"}
+                            {serviceActionUnit === service.unit ? (serviceActionPhase === "preview" ? "Checking…" : "Working…") : "Enable"}
                           </button>
                         ) : null}
                     </div>

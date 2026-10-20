@@ -159,6 +159,16 @@ struct ServiceInventory {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ServiceActionPreview {
+    relationship: String,
+    related_units: Vec<String>,
+    total_units: usize,
+    truncated: bool,
+    note: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct StartupAppSnapshot {
     id: String,
     name: String,
@@ -791,6 +801,105 @@ async fn set_service_state(scope: String, unit: String, action: String) -> Resul
     })
     .await
     .map_err(|error| format!("The service operation could not finish: {error}"))?
+}
+
+#[tauri::command]
+async fn get_service_action_preview(
+    scope: String,
+    unit: String,
+    action: String,
+) -> Result<ServiceActionPreview, String> {
+    if !unit.ends_with(".service")
+        || unit.starts_with('-')
+        || !unit.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"@._:-".contains(&byte))
+    {
+        return Err("Select a valid service from the current list".to_string());
+    }
+    if !matches!(action.as_str(), "start" | "stop" | "enable" | "disable") {
+        return Err("This service action is not supported".to_string());
+    }
+    let user_scope = match scope.as_str() {
+        "User" => true,
+        "System" => false,
+        _ => return Err("This service scope is not supported".to_string()),
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        if !query_service_scope(user_scope, &scope)?.iter().any(|service| service.unit == unit) {
+            return Err("That service is no longer in the current service list".to_string());
+        }
+
+        let relationship = match action.as_str() {
+            "start" => "Dependencies that may be started",
+            "stop" => "Declared reverse dependencies",
+            "enable" | "disable" => "Units linked to this service at startup",
+            _ => unreachable!(),
+        };
+
+        let output = if action == "enable" || action == "disable" {
+            let mut command = Command::new("systemctl");
+            if user_scope {
+                command.arg("--user");
+            }
+            command
+                .args(["show", "--property=WantedBy,RequiredBy", "--no-pager", unit.as_str()])
+                .output()
+        } else {
+            let mut command = Command::new("systemctl");
+            if user_scope {
+                command.arg("--user");
+            }
+            command
+                .arg("list-dependencies")
+                .args(["--all", "--plain", "--no-pager", "--full"]);
+            if action == "stop" {
+                command.arg("--reverse");
+            }
+            command.arg(unit.as_str()).output()
+        }
+        .map_err(|error| format!("Could not inspect service relationships: {error}"))?;
+
+        if !output.status.success() {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if message.is_empty() {
+                format!("The service manager could not inspect relationships for {unit}")
+            } else {
+                message
+            });
+        }
+
+        let mut related_units = Vec::new();
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let candidates = if action == "enable" || action == "disable" {
+                line.split_once('=').map(|(_, value)| value).unwrap_or("").split_whitespace().map(str::to_string).collect::<Vec<_>>()
+            } else {
+                let entry = line.trim().trim_start_matches('●').trim();
+                entry.split_whitespace().next().map(str::to_string).into_iter().collect()
+            };
+            for candidate in candidates {
+                if candidate != unit
+                    && candidate.contains('.')
+                    && candidate.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"@._:-".contains(&byte))
+                    && !related_units.contains(&candidate)
+                {
+                    related_units.push(candidate);
+                }
+            }
+        }
+
+        let total_units = related_units.len();
+        let limit = 16;
+        related_units.truncate(limit);
+        Ok(ServiceActionPreview {
+            relationship: relationship.to_string(),
+            related_units,
+            total_units,
+            truncated: total_units > limit,
+            note: "These are declared relationships reported by systemd. The exact jobs and their outcomes can vary with current unit state, conditions, conflicts, and authorization.".to_string(),
+        })
+    })
+    .await
+    .map_err(|error| format!("The service preview could not finish: {error}"))?
 }
 
 #[tauri::command]
@@ -1909,6 +2018,7 @@ pub fn run() {
             get_network_route_info,
             get_startup_apps,
             get_services,
+            get_service_action_preview,
             set_service_state,
             set_startup_enabled,
             get_storage,

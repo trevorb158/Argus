@@ -57,7 +57,7 @@ Some boundaries below are deliberate safety checks. Others are temporary impleme
 
 ### App-imposed blocks to review and expand
 
-1. **Service impact visibility remains incomplete.** The former hard-coded denylist (including systemd, Polkit, UDisks, NetworkManager, Wi-Fi, display managers, SSH, firewall, storage, and login services) has been removed. Each service action now requires confirmation and the dialog calls out known effects for common critical service groups; system-wide actions use normal Linux authorization. These warnings are practical guidance, not a complete dependency analysis. A later improvement should inspect reverse dependencies and explain the exact units systemd will also affect before confirmation.
+1. **Service impact visibility remains incomplete.** The former hard-coded denylist (including systemd, Polkit, UDisks, NetworkManager, Wi-Fi, display managers, SSH, firewall, storage, and login services) has been removed. Each service action now requires confirmation and the dialog calls out known effects for common critical service groups; system-wide actions use normal Linux authorization. The confirmation now lists declared forward dependencies for start, reverse dependencies for stop, and startup-linked units for enable/disable. This is an advisory relationship preview, not a guaranteed job transaction: runtime state, conditions, conflicts, and authorization can change systemd’s final jobs.
 
 2. **System-wide startup entries are read-only.** The toggle command only edits a user-owned `.desktop` entry under the current account's autostart folder. Add system-wide entry inspection and editing via a narrow privileged operation with a before/after preview, backup, confirmation, authorization, and rollback.
 
@@ -110,7 +110,8 @@ Deliver one tested vertical slice and one Git commit at a time. Update this docu
 
 - [x] Remove the app-level protected system-service deny list and offer the available systemd actions with confirmation.
 - [x] Add tailored consequence notices for common network, graphical-session, remote-access, firewall, storage, and core services.
-- [ ] Add exact dependency and cascading-action previews from systemd before service changes.
+- [x] Preview declared dependencies or reverse dependencies from systemd before service changes, and show startup-linked units for enable/disable. The preview is advisory: systemd can select different jobs based on live unit state, conditions, conflicts, and authorization.
+- [ ] Improve the preview with exact transaction jobs from systemd where the manager exposes a safe, non-mutating plan.
 - Add per-action scope/risk descriptions, confirmation, Polkit authorization, progress, cancellation where supported, and actionable errors.
 - Add system-wide startup controls and an elevated process-signal retry.
 - Add an operation history with timestamp, action, target, result, and recovery guidance; omit sensitive command arguments and secrets.

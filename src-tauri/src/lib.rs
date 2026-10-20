@@ -35,6 +35,23 @@ struct SystemInfoSnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DiagnosticsSnapshot {
+    operating_system: String,
+    kernel_version: Option<String>,
+    architecture: String,
+    processor: Option<String>,
+    logical_processors: usize,
+    physical_cores: Option<usize>,
+    cpu_usage_percent: f32,
+    memory_used_bytes: u64,
+    memory_total_bytes: u64,
+    uptime_seconds: u64,
+    desktop_environment: Option<String>,
+    session_type: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TemperatureSnapshot {
     label: String,
     temperature_celsius: f32,
@@ -213,6 +230,49 @@ fn get_system_info(state: tauri::State<'_, TelemetryState>) -> Result<SystemInfo
         desktop_environment: env::var("XDG_CURRENT_DESKTOP").ok().filter(|value| !value.is_empty()),
         session_type: env::var("XDG_SESSION_TYPE").ok().filter(|value| !value.is_empty()),
     })
+}
+
+#[tauri::command]
+fn get_diagnostics_snapshot(
+    state: tauri::State<'_, TelemetryState>,
+) -> Result<DiagnosticsSnapshot, String> {
+    let mut system = state
+        .0
+        .lock()
+        .map_err(|_| "Diagnostics information is unavailable".to_string())?;
+    system.refresh_cpu_usage();
+    system.refresh_memory();
+    let processor = system
+        .cpus()
+        .first()
+        .map(|cpu| cpu.brand().trim().to_string())
+        .filter(|brand| !brand.is_empty());
+
+    Ok(DiagnosticsSnapshot {
+        operating_system: System::long_os_version()
+            .or_else(System::name)
+            .unwrap_or_else(|| "Linux".to_string()),
+        kernel_version: System::kernel_version(),
+        architecture: env::consts::ARCH.to_string(),
+        processor,
+        logical_processors: system.cpus().len(),
+        physical_cores: System::physical_core_count(),
+        cpu_usage_percent: system.global_cpu_usage(),
+        memory_used_bytes: system.used_memory(),
+        memory_total_bytes: system.total_memory(),
+        uptime_seconds: System::uptime(),
+        desktop_environment: env::var("XDG_CURRENT_DESKTOP").ok().filter(|value| !value.is_empty()),
+        session_type: env::var("XDG_SESSION_TYPE").ok().filter(|value| !value.is_empty()),
+    })
+}
+
+#[tauri::command]
+fn save_diagnostics_report(path: String, report: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if path.extension().and_then(|extension| extension.to_str()) != Some("txt") {
+        return Err("Choose a .txt file for the diagnostics report".to_string());
+    }
+    fs::write(&path, report).map_err(|error| format!("Could not save diagnostics report: {error}"))
 }
 
 fn parse_desktop_entry(path: &Path, source: &str) -> Result<StartupAppSnapshot, String> {
@@ -718,10 +778,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(TelemetryState(Mutex::new(system)))
         .invoke_handler(tauri::generate_handler![
             get_telemetry,
             get_system_info,
+            get_diagnostics_snapshot,
+            save_diagnostics_report,
             get_temperatures,
             get_network_interfaces,
             get_startup_apps,

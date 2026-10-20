@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 
 type TelemetrySnapshot = {
@@ -61,6 +62,11 @@ type SystemInfoSnapshot = {
   desktopEnvironment: string | null;
   sessionType: string | null;
 };
+type DiagnosticsSnapshot = Omit<SystemInfoSnapshot, "hostName"> & {
+  cpuUsagePercent: number;
+  memoryUsedBytes: number;
+};
+type DiagnosticsStatus = { kind: "success" | "error"; message: string };
 
 type DriveSnapshot = {
   name: string;
@@ -95,7 +101,7 @@ type ProcessSnapshot = {
 
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
 
-type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system";
+type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 
@@ -184,6 +190,11 @@ function App() {
   const [systemInfo, setSystemInfo] = useState<SystemInfoSnapshot | null>(null);
   const [systemInfoError, setSystemInfoError] = useState<string | null>(null);
   const [systemInfoLoading, setSystemInfoLoading] = useState(false);
+  const [diagnosticsSnapshot, setDiagnosticsSnapshot] = useState<DiagnosticsSnapshot | null>(null);
+  const [diagnosticsReport, setDiagnosticsReport] = useState("");
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [diagnosticsSaving, setDiagnosticsSaving] = useState(false);
+  const [diagnosticsStatus, setDiagnosticsStatus] = useState<DiagnosticsStatus | null>(null);
   const previousNetworkCounters = useRef<Record<string, {
     receivedBytes: number;
     transmittedBytes: number;
@@ -744,6 +755,65 @@ function App() {
   const statusClass =
     telemetry && !telemetryError ? "status-dot" : "status-dot muted";
 
+  async function buildDiagnosticsReport() {
+    setDiagnosticsLoading(true);
+    setDiagnosticsStatus(null);
+    try {
+      const snapshot = await invoke<DiagnosticsSnapshot>("get_diagnostics_snapshot");
+      const lines = [
+        "Kestrel diagnostics summary",
+        `Generated: ${new Date().toISOString()}`,
+        "",
+        "System",
+        `Operating system: ${snapshot.operatingSystem}`,
+        `Kernel: ${snapshot.kernelVersion ?? "Unavailable"}`,
+        `Architecture: ${snapshot.architecture}`,
+        `Processor: ${snapshot.processor ?? "Unavailable"}`,
+        `Logical processors: ${snapshot.logicalProcessors}`,
+        `Physical cores: ${snapshot.physicalCores ?? "Unavailable"}`,
+        `Desktop environment: ${snapshot.desktopEnvironment ?? "Unavailable"}`,
+        `Session type: ${snapshot.sessionType ?? "Unavailable"}`,
+        "",
+        "Current readings",
+        `CPU usage: ${snapshot.cpuUsagePercent.toFixed(1)}%`,
+        `Memory in use: ${formatBytes(snapshot.memoryUsedBytes)} of ${formatBytes(snapshot.memoryTotalBytes)}`,
+        `System uptime: ${formatUptime(snapshot.uptimeSeconds)}`,
+        "",
+        "Privacy: This report excludes the device name, account name, IP addresses, process names, and file paths.",
+      ].join("\n");
+      setDiagnosticsSnapshot(snapshot);
+      setDiagnosticsReport(lines);
+      setDiagnosticsStatus({ kind: "success", message: "Report ready to review. Nothing has been saved yet." });
+    } catch (error) {
+      setDiagnosticsStatus({ kind: "error", message: `Could not collect diagnostics: ${String(error)}` });
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  }
+
+  async function saveDiagnosticsReport() {
+    if (!diagnosticsReport) return;
+    setDiagnosticsSaving(true);
+    setDiagnosticsStatus(null);
+    try {
+      const path = await save({
+        title: "Save Kestrel diagnostics report",
+        defaultPath: "kestrel-diagnostics.txt",
+        filters: [{ name: "Text report", extensions: ["txt"] }],
+      });
+      if (!path) {
+        setDiagnosticsStatus({ kind: "success", message: "Save cancelled. The report has not been written." });
+        return;
+      }
+      await invoke("save_diagnostics_report", { path, report: diagnosticsReport });
+      setDiagnosticsStatus({ kind: "success", message: "Diagnostics report saved." });
+    } catch (error) {
+      setDiagnosticsStatus({ kind: "error", message: `Could not save the report: ${String(error)}` });
+    } finally {
+      setDiagnosticsSaving(false);
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -806,6 +876,13 @@ function App() {
           >
             <span>ⓘ</span> System
           </button>
+          <button
+            className={`nav-item${page === "diagnostics" ? " active" : ""}`}
+            aria-current={page === "diagnostics" ? "page" : undefined}
+            onClick={() => setPage("diagnostics")}
+          >
+            <span>▤</span> Diagnostics
+          </button>
           <button className="nav-item upcoming" disabled title="Coming later">
             <span>⚙</span> Settings <small>SOON</small>
           </button>
@@ -842,9 +919,11 @@ function App() {
                         ? "LOGIN APPLICATIONS"
                         : page === "services"
                           ? "BACKGROUND SERVICES"
-                          : "DEVICE INFORMATION"}
+                          : page === "system"
+                            ? "DEVICE INFORMATION"
+                            : "SUPPORT TOOLS"}
             </p>
-            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : "System"}</h1>
+            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : "Diagnostics"}</h1>
             <p className="subheading">
               {page === "overview"
                 ? "A clear view of your workstation, at a glance."
@@ -858,7 +937,9 @@ function App() {
                         ? "Review applications configured to start when you sign in."
                         : page === "services"
                           ? "Review service activity and its configured startup mode."
-                          : "Review operating system, hardware, and desktop session details."}
+                          : page === "system"
+                            ? "Review operating system, hardware, and desktop session details."
+                            : "Create a local support summary and review it before saving."}
             </p>
           </div>
           <div className="refresh-state">
@@ -886,9 +967,13 @@ function App() {
                             ? serviceError
                               ? "status-dot muted"
                               : "status-dot"
-                            : systemInfoError
-                              ? "status-dot muted"
-                              : "status-dot"
+                            : page === "system"
+                              ? systemInfoError
+                                ? "status-dot muted"
+                                : "status-dot"
+                              : diagnosticsStatus?.kind === "error"
+                                ? "status-dot muted"
+                                : "status-dot"
               }
             />
             {page === "overview"
@@ -921,11 +1006,13 @@ function App() {
                             : serviceLoading
                               ? "Reading services"
                               : `${services.length} services`
-                          : systemInfoError
-                            ? "System information unavailable"
-                            : systemInfoLoading
-                              ? "Reading device information"
-                              : systemInfo?.operatingSystem ?? "System information unavailable"}
+                          : page === "system"
+                            ? systemInfoError
+                              ? "System information unavailable"
+                              : systemInfoLoading
+                                ? "Reading device information"
+                                : systemInfo?.operatingSystem ?? "System information unavailable"
+                            : diagnosticsStatus?.message ?? (diagnosticsLoading ? "Collecting local details" : diagnosticsSnapshot ? "Report ready for review" : "No report collected")}
           </div>
         </section>
 
@@ -1582,7 +1669,7 @@ function App() {
               Service status and startup modes come from the systemd system and user managers. This page is read-only; Kestrel will use a separate, permission-aware flow before offering service controls.
             </p>
           </section>
-        ) : (
+        ) : page === "system" ? (
           <section className="system-info-page" aria-labelledby="system-info-page-title">
             <div className="system-info-heading">
               <div>
@@ -1629,6 +1716,39 @@ function App() {
               </div>
             )}
             <p className="service-footnote">These details stay on this device. Some values depend on what the kernel and desktop environment make available.</p>
+          </section>
+        ) : (
+          <section className="diagnostics-page" aria-labelledby="diagnostics-page-title">
+            <div className="diagnostics-heading">
+              <div>
+                <h2 id="diagnostics-page-title">Prepare a support report</h2>
+                <p>Collect a small system summary, review its contents, then choose where to save it.</p>
+              </div>
+              <button className="startup-refresh-button" disabled={diagnosticsLoading} onClick={() => void buildDiagnosticsReport()}>
+                {diagnosticsLoading ? "Collecting…" : diagnosticsReport ? "Refresh report" : "Collect report"}
+              </button>
+            </div>
+            <div className="diagnostics-privacy">
+              The report contains OS and hardware details plus current CPU and memory readings. It excludes the device name, account name, IP addresses, process names, and file paths. The report stays on this device unless you choose to share it.
+            </div>
+            {diagnosticsStatus && (
+              <div className={`diagnostics-status ${diagnosticsStatus.kind}`} role={diagnosticsStatus.kind === "error" ? "alert" : "status"}>
+                {diagnosticsStatus.message}
+              </div>
+            )}
+            {diagnosticsReport ? (
+              <>
+                <pre className="diagnostics-preview" aria-label="Diagnostics report preview">{diagnosticsReport}</pre>
+                <div className="diagnostics-actions">
+                  <button className="startup-refresh-button" disabled={diagnosticsSaving} onClick={() => void saveDiagnosticsReport()}>
+                    {diagnosticsSaving ? "Saving…" : "Save reviewed report…"}
+                  </button>
+                </div>
+              </>
+            ) : !diagnosticsLoading ? (
+              <div className="storage-message" role="status">No diagnostics have been collected. Choose “Collect report” to prepare a preview.</div>
+            ) : null}
+            <p className="service-footnote">Kestrel does not upload this report. Saving is optional and requires you to choose a file location.</p>
           </section>
         )}
       </main>

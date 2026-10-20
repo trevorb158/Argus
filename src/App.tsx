@@ -132,6 +132,14 @@ type PartitionSnapshot = {
   isRemovable: boolean;
 };
 
+type SystemLogEntry = {
+  timestampMicros: number;
+  source: string;
+  severity: "Emergency" | "Alert" | "Critical" | "Error" | "Warning" | "Notice" | "Info" | "Debug";
+  message: string;
+};
+type LogSeverityFilter = "all" | "errors" | "warnings" | "info" | "debug";
+
 type ProcessSnapshot = {
   pid: number;
   name: string;
@@ -146,7 +154,7 @@ type ProcessSnapshot = {
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
 type TemperatureUnit = "celsius" | "fahrenheit";
 
-type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "maintenance" | "settings" | "performance";
+type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "logs" | "maintenance" | "settings" | "performance";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 type ProcessStateFilter = "all" | "running" | "sleeping" | "stopped" | "zombie";
@@ -274,6 +282,12 @@ function App() {
   const [logInventory, setLogInventory] = useState<LogInventorySnapshot | null>(null);
   const [logLoading, setLogLoading] = useState(false);
   const [logError, setLogError] = useState<string | null>(null);
+  const [systemLogs, setSystemLogs] = useState<SystemLogEntry[]>([]);
+  const [systemLogsLoading, setSystemLogsLoading] = useState(false);
+  const [systemLogsError, setSystemLogsError] = useState<string | null>(null);
+  const [systemLogsQuery, setSystemLogsQuery] = useState("");
+  const [systemLogsSeverity, setSystemLogsSeverity] = useState<LogSeverityFilter>("all");
+  const [systemLogsRefreshKey, setSystemLogsRefreshKey] = useState(0);
   const previousNetworkCounters = useRef<Record<string, {
     receivedBytes: number;
     transmittedBytes: number;
@@ -618,6 +632,28 @@ function App() {
   }, [page]);
 
   useEffect(() => {
+    if (page !== "logs") return;
+
+    let active = true;
+    setSystemLogsLoading(true);
+    invoke<SystemLogEntry[]>("get_recent_logs")
+      .then((entries) => {
+        if (active) {
+          setSystemLogs(entries);
+          setSystemLogsError(null);
+        }
+      })
+      .catch((error) => {
+        if (active) setSystemLogsError(String(error));
+      })
+      .finally(() => {
+        if (active) setSystemLogsLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [page, systemLogsRefreshKey]);
+
+  useEffect(() => {
     if (page !== "processes") return;
 
     let active = true;
@@ -771,6 +807,19 @@ function App() {
       (partition.label ?? "").toLocaleLowerCase().includes(query) ||
       (partition.fileSystem ?? "").toLocaleLowerCase().includes(query)
     );
+  });
+
+  const filteredSystemLogs = systemLogs.filter((entry) => {
+    const query = systemLogsQuery.trim().toLocaleLowerCase();
+    const matchesQuery = !query || entry.message.toLocaleLowerCase().includes(query) || entry.source.toLocaleLowerCase().includes(query);
+    const priority = ["Emergency", "Alert", "Critical", "Error"].includes(entry.severity)
+      ? "errors"
+      : entry.severity === "Warning"
+        ? "warnings"
+        : entry.severity === "Debug"
+          ? "debug"
+          : "info";
+    return matchesQuery && (systemLogsSeverity === "all" || priority === systemLogsSeverity);
   });
 
   const filteredProcesses = processes
@@ -1121,6 +1170,13 @@ function App() {
             <span>▤</span> Diagnostics
           </button>
           <button
+            className={`nav-item${page === "logs" ? " active" : ""}`}
+            aria-current={page === "logs" ? "page" : undefined}
+            onClick={() => setPage("logs")}
+          >
+            <span>≡</span> Recent Logs
+          </button>
+          <button
             className={`nav-item${page === "maintenance" ? " active" : ""}`}
             aria-current={page === "maintenance" ? "page" : undefined}
             onClick={() => setPage("maintenance")}
@@ -1171,13 +1227,15 @@ function App() {
                             ? "DEVICE INFORMATION"
                             : page === "diagnostics"
                               ? "SUPPORT TOOLS"
+                              : page === "logs"
+                              ? "SYSTEM JOURNAL"
                               : page === "maintenance"
                                 ? "STORAGE TOOLS"
                                 : page === "settings"
                                   ? "PREFERENCES"
                                   : "LIVE TELEMETRY"}
             </p>
-            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : page === "diagnostics" ? "Diagnostics" : page === "maintenance" ? "Maintenance" : page === "settings" ? "Settings" : "Performance"}</h1>
+            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : page === "diagnostics" ? "Diagnostics" : page === "logs" ? "Recent Logs" : page === "maintenance" ? "Maintenance" : page === "settings" ? "Settings" : "Performance"}</h1>
             <p className="subheading">
               {page === "overview"
                 ? "A clear view of your workstation, at a glance."
@@ -1195,7 +1253,9 @@ function App() {
                             ? "Review operating system, hardware, and desktop session details."
                             : page === "diagnostics"
                             ? "Create a local support summary and review it before saving."
-                            : page === "maintenance"
+                            : page === "logs"
+                              ? "Review recent system messages from this boot. Entries are read-only and stay on this device."
+                              : page === "maintenance"
                               ? "Review large files and application cache usage without changing anything."
                               : page === "settings"
                                 ? "Choose how Kestrel displays information on this device."
@@ -1235,7 +1295,9 @@ function App() {
                                 ? diagnosticsStatus?.kind === "error"
                                   ? "status-dot muted"
                                   : "status-dot"
-                                : page === "maintenance"
+                                : page === "logs"
+                                ? systemLogsError ? "status-dot muted" : "status-dot"
+                              : page === "maintenance"
                                   ? largeFileError || cacheError || logError
                                     ? "status-dot muted"
                                     : "status-dot"
@@ -1284,6 +1346,8 @@ function App() {
                                 : systemInfo?.operatingSystem ?? "System information unavailable"
                             : page === "diagnostics"
                               ? diagnosticsStatus?.message ?? (diagnosticsLoading ? "Collecting local details" : diagnosticsSnapshot ? "Report ready for review" : "No report collected")
+                              : page === "logs"
+                                ? systemLogsError ? "System journal unavailable" : systemLogsLoading ? "Reading system journal" : `${systemLogs.length} recent entries`
                               : page === "maintenance"
                                 ? largeFileError || cacheError || logError ? "Maintenance scan unavailable" : largeFileLoading || cacheLoading || logLoading ? "Scanning local files" : largeFileScan ? (largeFileScan.files.length + " large files found") : cacheInventory ? (formatProcessMemory(cacheInventory.totalBytes) + " in caches") : logInventory ? "Log sizes inspected" : "No folder scanned"
                                 : page === "settings"
@@ -2268,6 +2332,58 @@ function App() {
               <div className="storage-message" role="status">No diagnostics have been collected. Choose “Collect report” to prepare a preview.</div>
             ) : null}
             <p className="service-footnote">Kestrel does not upload this report. Saving is optional and requires you to choose a file location.</p>
+          </section>
+        ) : page === "logs" ? (
+          <section className="logs-page" aria-labelledby="system-logs-title">
+            <div className="logs-toolbar">
+              <div>
+                <h2 id="system-logs-title">Recent system messages</h2>
+                <p>{filteredSystemLogs.length} of {systemLogs.length} entries · latest 300 from this boot</p>
+              </div>
+              <div className="logs-controls">
+                <label className="logs-severity-label">
+                  <span className="sr-only">Filter logs by severity</span>
+                  <select value={systemLogsSeverity} onChange={(event) => setSystemLogsSeverity(event.target.value as LogSeverityFilter)}>
+                    <option value="all">All severities</option>
+                    <option value="errors">Errors and above</option>
+                    <option value="warnings">Warnings</option>
+                    <option value="info">Notice and info</option>
+                    <option value="debug">Debug</option>
+                  </select>
+                </label>
+                <label className="logs-search">
+                  <span className="sr-only">Search log messages or sources</span>
+                  <span aria-hidden="true">⌕</span>
+                  <input type="search" value={systemLogsQuery} onChange={(event) => setSystemLogsQuery(event.target.value)} placeholder="Search messages…" />
+                </label>
+                <button className="startup-refresh-button" onClick={() => setSystemLogsRefreshKey((value) => value + 1)} disabled={systemLogsLoading}>
+                  {systemLogsLoading ? "Refreshing…" : "Refresh"}
+                </button>
+              </div>
+            </div>
+            {systemLogsError ? (
+              <div className="storage-message" role="alert">Could not read recent system messages: {systemLogsError}</div>
+            ) : systemLogsLoading && systemLogs.length === 0 ? (
+              <div className="storage-message" role="status">Reading the system journal…</div>
+            ) : filteredSystemLogs.length === 0 ? (
+              <div className="storage-message" role="status">{systemLogs.length ? "No log entries match these filters." : "No recent system messages were found."}</div>
+            ) : (
+              <div className="logs-list" role="list" aria-label="Recent system messages">
+                {filteredSystemLogs.map((entry, index) => (
+                  <article className={`log-entry severity-${entry.severity.toLocaleLowerCase()}`} key={`${entry.timestampMicros}-${index}`} role="listitem">
+                    <div className="log-entry-meta">
+                      <time dateTime={entry.timestampMicros ? new Date(entry.timestampMicros / 1000).toISOString() : undefined}>
+                        {entry.timestampMicros ? new Date(entry.timestampMicros / 1000).toLocaleString() : "Time unavailable"}
+                      </time>
+                      <span className="log-severity">{entry.severity}</span>
+                      <strong title={entry.source}>{entry.source}</strong>
+                    </div>
+                    <p>{entry.message}</p>
+                  </article>
+                ))}
+              </div>
+            )}
+            <p className="service-footnote">Kestrel reads up to 300 entries from the current boot using the local system journal. It does not edit or upload log data.</p>
           </section>
         ) : page === "performance" ? (
           <section className="performance-page" aria-labelledby="performance-page-title">

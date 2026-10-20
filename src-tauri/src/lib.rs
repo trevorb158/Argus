@@ -83,6 +83,15 @@ struct DiagnosticsSnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct SystemLogEntry {
+    timestamp_micros: u64,
+    source: String,
+    severity: String,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TemperatureSnapshot {
     label: String,
     temperature_celsius: f32,
@@ -1311,6 +1320,51 @@ fn terminate_process(
 }
 
 #[tauri::command]
+fn get_recent_logs() -> Result<Vec<SystemLogEntry>, String> {
+    let output = Command::new("journalctl")
+        .args(["--boot", "--lines=300", "--no-pager", "--output=json"])
+        .output()
+        .map_err(|error| format!("Could not start journalctl: {error}"))?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if message.is_empty() { "Could not read the system journal".to_string() } else { message });
+    }
+
+    let mut entries = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let message = value.get("MESSAGE").and_then(serde_json::Value::as_str).unwrap_or("");
+        if message.is_empty() { continue; }
+        let priority = value.get("PRIORITY")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| value.parse::<u8>().ok())
+            .unwrap_or(6);
+        let severity = match priority {
+            0 => "Emergency", 1 => "Alert", 2 => "Critical", 3 => "Error",
+            4 => "Warning", 5 => "Notice", 6 => "Info", _ => "Debug",
+        };
+        let source = value.get("SYSLOG_IDENTIFIER")
+            .or_else(|| value.get("_COMM"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("System")
+            .to_string();
+        let timestamp_micros = value.get("__REALTIME_TIMESTAMP")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        entries.push(SystemLogEntry {
+            timestamp_micros,
+            source,
+            severity: severity.to_string(),
+            message: message.chars().take(4000).collect(),
+        });
+    }
+    entries.reverse();
+    Ok(entries)
+}
+
+#[tauri::command]
 fn get_partitions() -> Result<Vec<PartitionSnapshot>, String> {
     let output = Command::new("lsblk")
         .args(["--json", "--bytes", "--output", "NAME,PATH,TYPE,FSTYPE,LABEL,SIZE,MOUNTPOINTS,RM"])
@@ -1378,6 +1432,7 @@ pub fn run() {
             scan_large_files,
             get_cache_inventory,
             get_log_inventory,
+            get_recent_logs,
             terminate_process
         ])
         .run(tauri::generate_context!())

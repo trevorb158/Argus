@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
@@ -21,6 +21,9 @@ type ProcessSnapshot = {
   pid: number;
   name: string;
   startTime: number;
+  parentPid: number | null;
+  status: string;
+  runTimeSeconds: number;
   cpuUsagePercent: number;
   memoryBytes: number;
 };
@@ -48,6 +51,17 @@ function formatProcessMemory(bytes: number) {
   return `${bytes} B`;
 }
 
+function formatProcessRuntime(seconds: number) {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m ${remainingSeconds}s`;
+  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
+  return `${remainingSeconds}s`;
+}
+
 function App() {
   const [page, setPage] = useState<AppPage>("overview");
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot | null>(null);
@@ -66,6 +80,7 @@ function App() {
     direction: "desc",
   });
   const [terminatingPid, setTerminatingPid] = useState<number | null>(null);
+  const [selectedProcessPid, setSelectedProcessPid] = useState<number | null>(null);
   const [processActionStatus, setProcessActionStatus] =
     useState<ProcessActionStatus | null>(null);
 
@@ -648,7 +663,8 @@ function App() {
                   </thead>
                   <tbody>
                     {filteredProcesses.map((process) => (
-                      <tr key={process.pid}>
+                      <Fragment key={process.pid}>
+                      <tr>
                         <td className="process-name" title={process.name || "Unnamed process"}>
                           {process.name || "Unnamed process"}
                         </td>
@@ -656,6 +672,17 @@ function App() {
                         <td className="process-number">{process.cpuUsagePercent.toFixed(1)}%</td>
                         <td className="process-number">{formatProcessMemory(process.memoryBytes)}</td>
                         <td className="process-action-cell">
+                          <div className="process-row-actions">
+                          <button
+                            className="process-details-button"
+                            onClick={() => setSelectedProcessPid(
+                              selectedProcessPid === process.pid ? null : process.pid,
+                            )}
+                            aria-expanded={selectedProcessPid === process.pid}
+                            aria-controls={`process-details-${process.pid}`}
+                          >
+                            {selectedProcessPid === process.pid ? "Hide" : "Details"}
+                          </button>
                           <button
                             className="process-end-button"
                             onClick={() => void requestProcessEnd(process)}
@@ -664,8 +691,21 @@ function App() {
                           >
                             {terminatingPid === process.pid ? "Sending…" : "End"}
                           </button>
+                          </div>
                         </td>
                       </tr>
+                      {selectedProcessPid === process.pid && (
+                        <tr id={`process-details-${process.pid}`} className="process-details-row">
+                          <td className="process-details-cell" colSpan={5}>
+                            <dl className="process-details">
+                              <div><dt>State</dt><dd>{process.status}</dd></div>
+                              <div><dt>Parent PID</dt><dd>{process.parentPid ?? "Unavailable"}</dd></div>
+                              <div><dt>Running for</dt><dd>{formatProcessRuntime(process.runTimeSeconds)}</dd></div>
+                            </dl>
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>

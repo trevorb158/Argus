@@ -28,6 +28,9 @@ struct ProcessSnapshot {
     pid: u32,
     name: String,
     start_time: u64,
+    parent_pid: Option<u32>,
+    status: String,
+    run_time_seconds: u64,
     cpu_usage_percent: f32,
     memory_bytes: u64,
 }
@@ -78,6 +81,9 @@ fn get_processes(
             pid: pid.as_u32(),
             name: process.name().to_string_lossy().into_owned(),
             start_time: process.start_time(),
+            parent_pid: process.parent().map(|parent| parent.as_u32()),
+            status: format!("{:?}", process.status()),
+            run_time_seconds: process.run_time(),
             cpu_usage_percent: process.cpu_usage(),
             memory_bytes: process.memory(),
         })

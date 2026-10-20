@@ -17,6 +17,17 @@ type DriveSnapshot = {
   isRemovable: boolean;
 };
 
+type ProcessSnapshot = {
+  pid: number;
+  name: string;
+  cpuUsagePercent: number;
+  memoryBytes: number;
+};
+
+type AppPage = "overview" | "processes";
+type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
+type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
+
 type HistorySample = {
   timestamp: number;
   cpuPercent: number;
@@ -27,13 +38,29 @@ function formatGiB(bytes: number) {
   return (bytes / 1024 ** 3).toFixed(1);
 }
 
+function formatProcessMemory(bytes: number) {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MiB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`;
+  return `${bytes} B`;
+}
+
 function App() {
+  const [page, setPage] = useState<AppPage>("overview");
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot | null>(null);
   const [telemetryError, setTelemetryError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistorySample[]>([]);
   const [historyWindow, setHistoryWindow] = useState(300);
   const [drives, setDrives] = useState<DriveSnapshot[]>([]);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [processes, setProcesses] = useState<ProcessSnapshot[]>([]);
+  const [processError, setProcessError] = useState<string | null>(null);
+  const [processLoading, setProcessLoading] = useState(false);
+  const [processQuery, setProcessQuery] = useState("");
+  const [processSort, setProcessSort] = useState<ProcessSort>({
+    key: "cpu",
+    direction: "desc",
+  });
 
   useEffect(() => {
     let active = true;
@@ -112,6 +139,37 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (page !== "processes") return;
+
+    let active = true;
+    let timeoutId = 0;
+    setProcessLoading(true);
+
+    async function refreshProcesses() {
+      try {
+        const snapshot = await invoke<ProcessSnapshot[]>("get_processes");
+        if (active) {
+          setProcesses(snapshot);
+          setProcessError(null);
+        }
+      } catch (error) {
+        if (active) setProcessError(String(error));
+      } finally {
+        if (active) {
+          setProcessLoading(false);
+          timeoutId = window.setTimeout(() => void refreshProcesses(), 2500);
+        }
+      }
+    }
+
+    void refreshProcesses();
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [page]);
+
   const memoryPercent =
     telemetry && telemetry.memoryTotalBytes > 0
       ? Math.round(
@@ -157,10 +215,46 @@ function App() {
       return `${x},${y}`;
     })
     .join(" ");
-  const latestSample = visibleHistory.at(-1);
+  const latestSample = visibleHistory[visibleHistory.length - 1];
   const historyRangeLabel =
     historyWindow === 300 ? "5 minutes" : historyWindow === 900 ? "15 minutes" : "30 minutes";
   const sampleProgress = Math.min(history.length, historyWindow);
+
+  const filteredProcesses = processes
+    .filter((process) => {
+      const query = processQuery.trim().toLocaleLowerCase();
+      return (
+        !query ||
+        process.name.toLocaleLowerCase().includes(query) ||
+        String(process.pid).includes(query)
+      );
+    })
+    .sort((a, b) => {
+      let comparison = 0;
+      switch (processSort.key) {
+        case "name":
+          comparison = a.name.localeCompare(b.name);
+          break;
+        case "pid":
+          comparison = a.pid - b.pid;
+          break;
+        case "cpu":
+          comparison = a.cpuUsagePercent - b.cpuUsagePercent;
+          break;
+        case "memory":
+          comparison = a.memoryBytes - b.memoryBytes;
+          break;
+      }
+      return processSort.direction === "asc" ? comparison : -comparison;
+    });
+
+  function sortProcesses(key: ProcessSortKey) {
+    setProcessSort((current) => ({
+      key,
+      direction:
+        current.key === key && current.direction === "desc" ? "asc" : "desc",
+    }));
+  }
 
   const statusText = telemetryError
     ? "Telemetry unavailable"
@@ -184,17 +278,25 @@ function App() {
 
         <div className="nav-label">WORKSPACE</div>
         <nav className="navigation" aria-label="Main navigation">
-          <button className="nav-item active">
+          <button
+            className={`nav-item${page === "overview" ? " active" : ""}`}
+            aria-current={page === "overview" ? "page" : undefined}
+            onClick={() => setPage("overview")}
+          >
             <span>◫</span> Overview
           </button>
-          <button className="nav-item">
-            <span>▤</span> Storage
+          <button className="nav-item upcoming" disabled title="Coming later">
+            <span>▤</span> Storage <small>SOON</small>
           </button>
-          <button className="nav-item">
+          <button
+            className={`nav-item${page === "processes" ? " active" : ""}`}
+            aria-current={page === "processes" ? "page" : undefined}
+            onClick={() => setPage("processes")}
+          >
             <span>⌘</span> Processes
           </button>
-          <button className="nav-item">
-            <span>⚙</span> Settings
+          <button className="nav-item upcoming" disabled title="Coming later">
+            <span>⚙</span> Settings <small>SOON</small>
           </button>
         </nav>
 
@@ -207,7 +309,7 @@ function App() {
       <main className="main-content">
         <header className="topbar">
           <div className="breadcrumb">
-            KESTREL <span>/</span> OVERVIEW
+            KESTREL <span>/</span> {page.toUpperCase()}
           </div>
           <button className="device-button">
             <span className="status-dot" /> This device <span>⌄</span>
@@ -216,17 +318,30 @@ function App() {
 
         <section className="page-heading">
           <div>
-            <p className="eyebrow">SYSTEM DASHBOARD</p>
-            <h1>Overview</h1>
+            <p className="eyebrow">
+              {page === "overview" ? "SYSTEM DASHBOARD" : "RUNNING APPLICATIONS AND SERVICES"}
+            </p>
+            <h1>{page === "overview" ? "Overview" : "Processes"}</h1>
             <p className="subheading">
-              A clear view of your workstation, at a glance.
+              {page === "overview"
+                ? "A clear view of your workstation, at a glance."
+                : "See which programs are using your system resources."}
             </p>
           </div>
           <div className="refresh-state">
-            <span className={statusClass} /> {statusText}
+            <span className={page === "overview" ? statusClass : processError ? "status-dot muted" : "status-dot"} />
+            {page === "overview"
+              ? statusText
+              : processError
+                ? "Process list unavailable"
+                : processLoading
+                  ? "Reading processes"
+                  : `${processes.length} processes`}
           </div>
         </section>
 
+        {page === "overview" ? (
+          <>
         <section className="metric-grid" aria-label="System metrics">
           {metrics.map((metric) => (
             <article className="metric-card" key={metric.label}>
@@ -396,6 +511,77 @@ function App() {
               ? "CPU and memory are updating from this device."
               : "Connecting to the local telemetry service..."}
         </footer>
+          </>
+        ) : (
+          <section className="process-page" aria-labelledby="process-list-title">
+            <div className="process-toolbar">
+              <div>
+                <h2 id="process-list-title">Process list</h2>
+                <p>{filteredProcesses.length} shown · refreshed every 2.5 seconds</p>
+              </div>
+              <label className="process-search">
+                <span className="sr-only">Search by process name or PID</span>
+                <span aria-hidden="true">⌕</span>
+                <input
+                  type="search"
+                  value={processQuery}
+                  onChange={(event) => setProcessQuery(event.target.value)}
+                  placeholder="Search processes…"
+                />
+              </label>
+            </div>
+
+            {processError ? (
+              <div className="process-message" role="alert">
+                Could not read the process list: {processError}
+              </div>
+            ) : processLoading && processes.length === 0 ? (
+              <div className="process-message" role="status">
+                Reading running processes…
+              </div>
+            ) : filteredProcesses.length === 0 ? (
+              <div className="process-message" role="status">
+                {processQuery ? "No processes match your search." : "No processes were found."}
+              </div>
+            ) : (
+              <div className="process-table-wrap">
+                <table className="process-table">
+                  <thead>
+                    <tr>
+                      <th aria-sort={processSort.key === "name" ? `${processSort.direction}ending` : "none"}>
+                        <button onClick={() => sortProcesses("name")}>Name <span>↕</span></button>
+                      </th>
+                      <th aria-sort={processSort.key === "pid" ? `${processSort.direction}ending` : "none"}>
+                        <button onClick={() => sortProcesses("pid")}>PID <span>↕</span></button>
+                      </th>
+                      <th aria-sort={processSort.key === "cpu" ? `${processSort.direction}ending` : "none"}>
+                        <button onClick={() => sortProcesses("cpu")}>CPU <span>↕</span></button>
+                      </th>
+                      <th aria-sort={processSort.key === "memory" ? `${processSort.direction}ending` : "none"}>
+                        <button onClick={() => sortProcesses("memory")}>Memory <span>↕</span></button>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredProcesses.map((process) => (
+                      <tr key={process.pid}>
+                        <td className="process-name" title={process.name || "Unnamed process"}>
+                          {process.name || "Unnamed process"}
+                        </td>
+                        <td className="process-number">{process.pid}</td>
+                        <td className="process-number">{process.cpuUsagePercent.toFixed(1)}%</td>
+                        <td className="process-number">{formatProcessMemory(process.memoryBytes)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="process-footnote">
+              Process information is read-only. Some system processes may show limited details due to operating-system permissions.
+            </p>
+          </section>
+        )}
       </main>
     </div>
   );

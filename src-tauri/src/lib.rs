@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
 use serde::Serialize;
-use sysinfo::{Disks, System};
+use sysinfo::{Disks, ProcessRefreshKind, ProcessesToUpdate, System};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,6 +20,15 @@ struct DriveSnapshot {
     total_bytes: u64,
     available_bytes: u64,
     is_removable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcessSnapshot {
+    pid: u32,
+    name: String,
+    cpu_usage_percent: f32,
+    memory_bytes: u64,
 }
 
 struct TelemetryState(Mutex<System>);
@@ -41,6 +50,36 @@ fn get_telemetry(
         memory_used_bytes: system.used_memory(),
         memory_total_bytes: system.total_memory(),
     })
+}
+
+#[tauri::command]
+fn get_processes(
+    state: tauri::State<'_, TelemetryState>,
+) -> Result<Vec<ProcessSnapshot>, String> {
+    let mut system = state
+        .0
+        .lock()
+        .map_err(|_| "Process information is unavailable".to_string())?;
+
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing()
+            .with_cpu()
+            .with_memory()
+            .without_tasks(),
+    );
+
+    Ok(system
+        .processes()
+        .iter()
+        .map(|(pid, process)| ProcessSnapshot {
+            pid: pid.as_u32(),
+            name: process.name().to_string_lossy().into_owned(),
+            cpu_usage_percent: process.cpu_usage(),
+            memory_bytes: process.memory(),
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -70,7 +109,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(TelemetryState(Mutex::new(system)))
-        .invoke_handler(tauri::generate_handler![get_telemetry, get_storage])
+        .invoke_handler(tauri::generate_handler![get_telemetry, get_storage, get_processes])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

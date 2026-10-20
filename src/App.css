@@ -871,6 +871,195 @@ h1 {
   line-height: 1.55;
 }
 
+.network-page {
+  margin-top: 0;
+  padding: 20px;
+  border: 1px solid #252d37;
+  border-radius: 11px;
+  background: linear-gradient(145deg, rgba(22, 28, 36, 0.96), rgba(16, 21, 28, 0.96));
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.12);
+}
+
+.network-toolbar {
+  margin-bottom: 16px;
+}
+
+.network-toolbar h2 {
+  margin: 0 0 5px;
+  color: #e4eaf1;
+  font-size: 15px;
+}
+
+.network-toolbar p {
+  margin: 0;
+  color: #788593;
+  font-size: 10px;
+}
+
+.network-rate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.network-rate-card {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid #29343e;
+  border-radius: 8px;
+  background: #111820;
+}
+
+.network-rate-card span {
+  color: #7f8c99;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.network-rate-card strong {
+  color: #76d5b6;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.network-rate-card.upload strong {
+  color: #8ca9e7;
+}
+
+.network-rate-card small {
+  color: #73808d;
+  font-size: 9px;
+}
+
+.network-interface-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.network-interface-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #252e39;
+  border-radius: 9px;
+  background: rgba(12, 17, 23, 0.48);
+}
+
+.network-interface-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.network-interface-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid #33433e;
+  border-radius: 8px;
+  background: #17231f;
+  color: #76d5b6;
+  font-size: 17px;
+}
+
+.network-interface-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.network-interface-title h3 {
+  overflow: hidden;
+  margin: 0 0 4px;
+  color: #dce4ec;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.network-interface-title p {
+  margin: 0;
+  color: #788593;
+  font-size: 9px;
+}
+
+.network-interface-badge {
+  padding: 4px 7px;
+  border: 1px solid #304039;
+  border-radius: 6px;
+  background: #17231f;
+  color: #9addc6;
+  font-size: 9px;
+}
+
+.network-interface-badge.loopback {
+  border-color: #343b4b;
+  background: #1b202a;
+  color: #a7b0c0;
+}
+
+.network-interface-rates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 15px 0 13px;
+  padding: 12px 0;
+  border-top: 1px solid #222b35;
+  border-bottom: 1px solid #222b35;
+}
+
+.network-interface-rates div {
+  display: grid;
+  gap: 5px;
+}
+
+.network-interface-rates span {
+  color: #788593;
+  font-size: 9px;
+}
+
+.network-interface-rates strong {
+  color: #cbd4de;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.network-interface-details {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.network-interface-details div {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.network-interface-details dt {
+  color: #788593;
+  font-size: 9px;
+}
+
+.network-interface-details dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: #adb8c4;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.network-footnote {
+  margin: 15px 0 0;
+  color: #707d8b;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .process-page {
   margin-top: 0;
   padding: 20px;
@@ -1175,7 +1364,9 @@ h1 {
     width: 100%;
   }
 
-  .volume-grid {
+  .volume-grid,
+  .network-interface-list,
+  .network-rate-grid {
     grid-template-columns: 1fr;
   }
 

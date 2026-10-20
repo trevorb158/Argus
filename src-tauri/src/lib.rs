@@ -2,7 +2,7 @@ use std::process::Command;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use sysinfo::{Components, Disks, Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
+use sysinfo::{Components, Disks, Networks, Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +28,17 @@ struct DriveSnapshot {
     total_bytes: u64,
     available_bytes: u64,
     is_removable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkInterfaceSnapshot {
+    name: String,
+    mac_address: String,
+    ip_addresses: Vec<String>,
+    received_bytes: u64,
+    transmitted_bytes: u64,
+    is_loopback: bool,
 }
 
 #[derive(Serialize)]
@@ -124,6 +135,32 @@ fn get_telemetry(
         memory_used_bytes: system.used_memory(),
         memory_total_bytes: system.total_memory(),
     })
+}
+
+#[tauri::command]
+fn get_network_interfaces() -> Vec<NetworkInterfaceSnapshot> {
+    let networks = Networks::new_with_refreshed_list();
+    let mut interfaces = networks
+        .list()
+        .iter()
+        .map(|(name, network)| {
+            let mac_address = network.mac_address().to_string();
+            NetworkInterfaceSnapshot {
+                name: name.clone(),
+                mac_address: if mac_address == "00:00:00:00:00:00" {
+                    String::new()
+                } else {
+                    mac_address
+                },
+                ip_addresses: network.ip_networks().iter().map(ToString::to_string).collect(),
+                received_bytes: network.total_received(),
+                transmitted_bytes: network.total_transmitted(),
+                is_loopback: name == "lo",
+            }
+        })
+        .collect::<Vec<_>>();
+    interfaces.sort_by(|a, b| a.name.cmp(&b.name));
+    interfaces
 }
 
 #[tauri::command]
@@ -272,6 +309,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_telemetry,
             get_temperatures,
+            get_network_interfaces,
             get_storage,
             get_partitions,
             get_processes,

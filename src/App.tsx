@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
@@ -11,6 +11,20 @@ type TelemetrySnapshot = {
 type TemperatureSnapshot = {
   label: string;
   temperatureCelsius: number;
+};
+
+type NetworkCountersSnapshot = {
+  name: string;
+  macAddress: string;
+  ipAddresses: string[];
+  receivedBytes: number;
+  transmittedBytes: number;
+  isLoopback: boolean;
+};
+
+type NetworkInterfaceSnapshot = NetworkCountersSnapshot & {
+  downloadBytesPerSecond: number;
+  uploadBytesPerSecond: number;
 };
 
 type DriveSnapshot = {
@@ -46,7 +60,7 @@ type ProcessSnapshot = {
 
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
 
-type AppPage = "overview" | "processes" | "storage";
+type AppPage = "overview" | "processes" | "storage" | "network";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 
@@ -65,6 +79,12 @@ function formatProcessMemory(bytes: number) {
   if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MiB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`;
   return `${bytes} B`;
+}
+
+function formatNetworkRate(bytesPerSecond: number) {
+  if (bytesPerSecond >= 1024 ** 2) return `${(bytesPerSecond / 1024 ** 2).toFixed(1)} MiB/s`;
+  if (bytesPerSecond >= 1024) return `${(bytesPerSecond / 1024).toFixed(1)} KiB/s`;
+  return `${Math.round(bytesPerSecond)} B/s`;
 }
 
 function formatProcessRuntime(seconds: number) {
@@ -92,6 +112,14 @@ function App() {
   const [partitions, setPartitions] = useState<PartitionSnapshot[]>([]);
   const [partitionError, setPartitionError] = useState<string | null>(null);
   const [partitionLoading, setPartitionLoading] = useState(false);
+  const [networkInterfaces, setNetworkInterfaces] = useState<NetworkInterfaceSnapshot[]>([]);
+  const [networkError, setNetworkError] = useState<string | null>(null);
+  const [networkLoading, setNetworkLoading] = useState(false);
+  const previousNetworkCounters = useRef<Record<string, {
+    receivedBytes: number;
+    transmittedBytes: number;
+    sampleTime: number;
+  }>>({});
   const [driveQuery, setDriveQuery] = useState("");
   const [processes, setProcesses] = useState<ProcessSnapshot[]>([]);
   const [processError, setProcessError] = useState<string | null>(null);
@@ -249,6 +277,65 @@ function App() {
   }, [page]);
 
   useEffect(() => {
+    if (page !== "network") return;
+
+    let active = true;
+    let timeoutId = 0;
+    previousNetworkCounters.current = {};
+    setNetworkLoading(true);
+
+    async function refreshNetworkInterfaces() {
+      try {
+        const snapshot = await invoke<NetworkCountersSnapshot[]>("get_network_interfaces");
+        if (active) {
+          const sampleTime = performance.now();
+          const nextCounters: typeof previousNetworkCounters.current = {};
+          const interfaces = snapshot.map((network) => {
+            const previous = previousNetworkCounters.current[network.name];
+            const elapsedSeconds = previous
+              ? Math.max((sampleTime - previous.sampleTime) / 1000, 0.001)
+              : 0;
+            const measured: NetworkInterfaceSnapshot = {
+              ...network,
+              downloadBytesPerSecond: previous && network.receivedBytes >= previous.receivedBytes
+                ? (network.receivedBytes - previous.receivedBytes) / elapsedSeconds
+                : 0,
+              uploadBytesPerSecond: previous && network.transmittedBytes >= previous.transmittedBytes
+                ? (network.transmittedBytes - previous.transmittedBytes) / elapsedSeconds
+                : 0,
+            };
+            nextCounters[network.name] = {
+              receivedBytes: network.receivedBytes,
+              transmittedBytes: network.transmittedBytes,
+              sampleTime,
+            };
+            return measured;
+          });
+          previousNetworkCounters.current = nextCounters;
+          setNetworkInterfaces(interfaces);
+          setNetworkError(null);
+        }
+      } catch (error) {
+        if (active) {
+          setNetworkInterfaces([]);
+          setNetworkError(String(error));
+        }
+      } finally {
+        if (active) {
+          setNetworkLoading(false);
+          timeoutId = window.setTimeout(() => void refreshNetworkInterfaces(), 1000);
+        }
+      }
+    }
+
+    void refreshNetworkInterfaces();
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [page]);
+
+  useEffect(() => {
     if (page !== "processes") return;
 
     let active = true;
@@ -285,6 +372,16 @@ function App() {
           (telemetry.memoryUsedBytes / telemetry.memoryTotalBytes) * 100,
         )
       : 0;
+
+  const nonLoopbackInterfaces = networkInterfaces.filter((network) => !network.isLoopback);
+  const totalDownloadRate = nonLoopbackInterfaces.reduce(
+    (total, network) => total + network.downloadBytesPerSecond,
+    0,
+  );
+  const totalUploadRate = nonLoopbackInterfaces.reduce(
+    (total, network) => total + network.uploadBytesPerSecond,
+    0,
+  );
 
   const hottestTemperature = temperatures.reduce<TemperatureSnapshot | null>(
     (hottest, sensor) =>
@@ -470,6 +567,13 @@ function App() {
             <span>▤</span> Storage
           </button>
           <button
+            className={`nav-item${page === "network" ? " active" : ""}`}
+            aria-current={page === "network" ? "page" : undefined}
+            onClick={() => setPage("network")}
+          >
+            <span>⌁</span> Network
+          </button>
+          <button
             className={`nav-item${page === "processes" ? " active" : ""}`}
             aria-current={page === "processes" ? "page" : undefined}
             onClick={() => setPage("processes")}
@@ -504,15 +608,19 @@ function App() {
                 ? "SYSTEM DASHBOARD"
                 : page === "processes"
                   ? "RUNNING APPLICATIONS AND SERVICES"
-                  : "DISKS AND VOLUMES"}
+                  : page === "storage"
+                    ? "DISKS AND VOLUMES"
+                    : "NETWORK INTERFACES"}
             </p>
-            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : "Storage"}</h1>
+            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : "Network"}</h1>
             <p className="subheading">
               {page === "overview"
                 ? "A clear view of your workstation, at a glance."
                 : page === "processes"
                   ? "See which programs are using your system resources."
-                  : "Review mounted volumes and how their space is being used."}
+                  : page === "storage"
+                    ? "Review mounted volumes and how their space is being used."
+                    : "See live traffic and addresses for this device’s network interfaces."}
             </p>
           </div>
           <div className="refresh-state">
@@ -524,9 +632,13 @@ function App() {
                     ? processError
                       ? "status-dot muted"
                       : "status-dot"
-                    : storageError
-                      ? "status-dot muted"
-                      : "status-dot"
+                    : page === "storage"
+                      ? storageError || partitionError
+                        ? "status-dot muted"
+                        : "status-dot"
+                      : networkError
+                        ? "status-dot muted"
+                        : "status-dot"
               }
             />
             {page === "overview"
@@ -537,9 +649,15 @@ function App() {
                   : processLoading
                     ? "Reading processes"
                     : `${processes.length} processes`
-                : storageError
-                  ? "Storage unavailable"
-                  : `${drives.length} mounted volumes`}
+                : page === "storage"
+                  ? storageError || partitionError
+                    ? "Storage information unavailable"
+                    : `${drives.length} mounted volumes`
+                  : networkError
+                    ? "Network information unavailable"
+                    : networkLoading
+                      ? "Reading interfaces"
+                      : `${networkInterfaces.length} interfaces`}
           </div>
         </section>
 
@@ -829,7 +947,7 @@ function App() {
               Ending a process requests normal termination. Unsaved work may be lost, and protected system processes may reject the request. Kestrel will not force-stop a process.
             </p>
           </section>
-        ) : (
+        ) : page === "storage" ? (
           <section className="storage-page" aria-labelledby="storage-page-title">
             <div className="storage-page-toolbar">
               <div>
@@ -959,6 +1077,65 @@ function App() {
             </section>
             <p className="storage-footnote">
               Linux supplies this read-only partition inventory. Used and free space are shown above for mounted volumes; unmounted partitions show capacity only. Kestrel does not mount or repair drives.
+            </p>
+          </section>
+        ) : (
+          <section className="network-page" aria-labelledby="network-page-title">
+            <div className="network-toolbar">
+              <div>
+                <h2 id="network-page-title">Live network activity</h2>
+                <p>{networkLoading && networkInterfaces.length === 0 ? "Reading interface counters…" : `${networkInterfaces.length} interfaces · refreshes every second`}</p>
+              </div>
+            </div>
+
+            {networkError ? (
+              <div className="storage-message" role="alert">Could not read network interfaces: {networkError}</div>
+            ) : networkLoading && networkInterfaces.length === 0 ? (
+              <div className="storage-message" role="status">Reading local network information…</div>
+            ) : networkInterfaces.length === 0 ? (
+              <div className="storage-message" role="status">Linux did not report any network interfaces.</div>
+            ) : (
+              <>
+                <div className="network-rate-grid">
+                  <article className="network-rate-card download">
+                    <span>↓ DOWNLOAD</span>
+                    <strong>{formatNetworkRate(totalDownloadRate)}</strong>
+                    <small>Combined non-loopback traffic</small>
+                  </article>
+                  <article className="network-rate-card upload">
+                    <span>↑ UPLOAD</span>
+                    <strong>{formatNetworkRate(totalUploadRate)}</strong>
+                    <small>Combined non-loopback traffic</small>
+                  </article>
+                </div>
+                <div className="network-interface-list">
+                  {networkInterfaces.map((network) => (
+                    <article className="network-interface-card" key={network.name}>
+                      <div className="network-interface-heading">
+                        <div className="network-interface-icon" aria-hidden="true">⌁</div>
+                        <div className="network-interface-title">
+                          <h3>{network.name}</h3>
+                          <p>{network.isLoopback ? "Loopback interface" : "Network interface"}</p>
+                        </div>
+                        <span className={`network-interface-badge${network.isLoopback ? " loopback" : ""}`}>
+                          {network.isLoopback ? "Local" : "Device"}
+                        </span>
+                      </div>
+                      <div className="network-interface-rates">
+                        <div><span>↓ Download</span><strong>{formatNetworkRate(network.downloadBytesPerSecond)}</strong></div>
+                        <div><span>↑ Upload</span><strong>{formatNetworkRate(network.uploadBytesPerSecond)}</strong></div>
+                      </div>
+                      <dl className="network-interface-details">
+                        <div><dt>IP addresses</dt><dd>{network.ipAddresses.length ? network.ipAddresses.join(" · ") : "None reported"}</dd></div>
+                        <div><dt>MAC address</dt><dd>{network.macAddress || "Unavailable"}</dd></div>
+                      </dl>
+                    </article>
+                  ))}
+                </div>
+              </>
+            )}
+            <p className="network-footnote">
+              Traffic rates are calculated from local interface counters. Combined rates exclude loopback; virtual interfaces can overlap with physical-interface counters. Kestrel does not inspect websites, connections, or network contents.
             </p>
           </section>
         )}

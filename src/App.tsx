@@ -66,7 +66,6 @@ type ServiceSnapshot = {
   activeState: string;
   subState: string;
   startupState: string;
-  protected: boolean;
 };
 
 type ServiceInventory = { services: ServiceSnapshot[]; warnings: string[] };
@@ -276,6 +275,53 @@ function readHistoryWindow(): number {
   } catch {
     return 300;
   }
+}
+
+function serviceActionImpact(service: ServiceSnapshot, action: "start" | "stop" | "enable" | "disable") {
+  const unit = service.unit.toLowerCase();
+  const isStopping = action === "stop";
+  const isDisabling = action === "disable";
+  const isStarting = action === "start";
+  const scope = service.scope === "System" ? "the system" : "your user session";
+  const general = isStopping
+    ? `This stops the service in ${scope} and may interrupt apps or features that depend on it.`
+    : isDisabling
+      ? `This prevents the service from starting automatically in ${scope}; it does not stop a currently running service.`
+      : isStarting
+        ? `This starts the service in ${scope} now and may also start its dependencies.`
+        : `This allows the service to start automatically in ${scope}.`;
+  const risk =
+    /^(networkmanager|networking|wpa_supplicant|systemd-networkd|iwd)(@.*)?\.service$/.test(unit)
+      ? isStopping
+        ? " It may disconnect Wi-Fi, Internet, VPN, or local network access; a remote session could be lost."
+        : isDisabling
+          ? " Network access may not be available after the next restart or login."
+          : " This affects network connectivity."
+      : /^(display-manager|gdm|gdm3|sddm|lightdm)(@.*)?\.service$/.test(unit)
+        ? isStopping
+          ? " This can end the graphical desktop session and close its apps. Save your work first."
+          : isDisabling
+            ? " The graphical login screen may be unavailable after the next restart."
+            : " This affects the graphical login session."
+        : /^(ssh|sshd)\.service$/.test(unit)
+          ? isStopping
+            ? " Remote SSH sessions or new remote logins may be interrupted."
+            : isDisabling
+              ? " New SSH logins will be unavailable after the next restart."
+              : " This affects remote SSH access."
+          : /^(ufw|nftables|firewalld)\.service$/.test(unit)
+            ? isStopping
+              ? " Firewall filtering may change immediately, which can affect network exposure."
+              : isDisabling
+                ? " Firewall filtering may be absent after the next restart."
+                : " This affects firewall filtering."
+            : /^(udisks2|multipathd)\.service$/.test(unit) || /^(lvm2-|cryptsetup-)/.test(unit)
+              ? " This may affect mounted, encrypted, or managed storage devices and access to their data."
+              : /^(systemd-|dbus|polkit)\.service$/.test(unit)
+                ? " This is a core session or system service. Changing it can make the desktop or system unstable, interrupt authorization, or prevent further management."
+                : "";
+  const authorization = service.scope === "System" ? " Linux may request administrator authorization or refuse an operation the system considers unavailable." : "";
+  return `${general}${risk}${authorization}`;
 }
 
 function App() {
@@ -1178,16 +1224,8 @@ function App() {
   async function requestServiceAction(service: ServiceSnapshot, action: "start" | "stop" | "enable" | "disable") {
     if (serviceActionUnit !== null) return;
     const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
-    const scopeDescription = service.scope === "System" ? "system-wide" : "user session";
-    const detail = action === "stop"
-      ? "This may interrupt apps or system functions that depend on it."
-      : action === "disable"
-        ? `This prevents it from starting automatically in your ${scopeDescription}. It will not stop a running instance.`
-        : action === "enable"
-          ? `This allows it to start automatically in your ${scopeDescription}.`
-          : `This starts it in your ${scopeDescription} now.`;
-    const authorization = service.scope === "System" ? " Linux may ask for administrator authorization." : "";
-    if (!window.confirm(`${actionLabel} ${service.scope === "System" ? "system" : "user"} service ${service.unit}?\n\n${detail}${authorization}`)) return;
+    const detail = serviceActionImpact(service, action);
+    if (!window.confirm(`${actionLabel} ${service.scope === "System" ? "system" : "user"} service ${service.unit}?\n\n${detail}\n\nContinue only if you understand this effect.`)) return;
 
     setServiceActionUnit(service.unit);
     setServiceActionStatus(null);
@@ -2480,9 +2518,6 @@ function App() {
                     </span>
                     <span className="service-startup-state">{service.startupState}</span>
                     <span className={`service-scope${service.scope === "User" ? " user" : ""}`}>{service.scope}</span>
-                    {service.protected ? (
-                      <span className="service-row-actions read-only">Protected</span>
-                    ) : (
                     <div className={`service-row-actions${service.scope === "System" ? " system" : ""}`}>
                         {service.activeState === "active" ? (
                           <button className="service-action-button stop" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "stop")}>
@@ -2503,7 +2538,6 @@ function App() {
                           </button>
                         ) : null}
                     </div>
-                    )}
                   </article>
                 ))}
               </div>
@@ -2550,7 +2584,7 @@ function App() {
               </button>
             )}
             <p className="service-footnote">
-              Service status comes from the systemd system and user managers. Service actions require confirmation; Linux may request administrator authorization for system-wide changes. Core system, login, network, remote-access, firewall, and disk-management services are protected.
+              Service status comes from the systemd system and user managers. Every listed service can be acted on when systemd exposes an available action. Kestrel explains known effects and asks for confirmation; Linux may request administrator authorization or refuse an operation that is unavailable on this system.
             </p>
           </section>
         ) : page === "system" ? (

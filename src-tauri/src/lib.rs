@@ -148,7 +148,6 @@ struct ServiceSnapshot {
     active_state: String,
     sub_state: String,
     startup_state: String,
-    protected: bool,
 }
 
 #[derive(Serialize)]
@@ -659,7 +658,6 @@ fn query_service_scope(user_scope: bool, scope: &str) -> Result<Vec<ServiceSnaps
         }
         let unit = fields[0].to_string();
         let key = format!("{scope}:{unit}");
-        let protected = scope == "System" && is_protected_system_service(&unit);
         services.insert(key, ServiceSnapshot {
             unit,
             description: fields[4..].join(" "),
@@ -667,7 +665,6 @@ fn query_service_scope(user_scope: bool, scope: &str) -> Result<Vec<ServiceSnaps
             active_state: fields[2].to_string(),
             sub_state: fields[3].to_string(),
             startup_state: "unknown".to_string(),
-            protected,
         });
     }
 
@@ -688,7 +685,6 @@ fn query_service_scope(user_scope: bool, scope: &str) -> Result<Vec<ServiceSnaps
             active_state: "inactive".to_string(),
             sub_state: "dead".to_string(),
             startup_state: "unknown".to_string(),
-            protected: scope == "System" && is_protected_system_service(&unit),
         });
         service.startup_state = fields[1].to_string();
     }
@@ -717,13 +713,12 @@ fn query_service_scope(user_scope: bool, scope: &str) -> Result<Vec<ServiceSnaps
                     let alias_key = format!("{scope}:{alias}");
                     let target_key = format!("{scope}:{target}");
                     if let Some(target_state) = services.get(&target_key).map(|service| {
-                        (service.active_state.clone(), service.sub_state.clone(), service.protected)
+                        (service.active_state.clone(), service.sub_state.clone())
                     }) {
                         if let Some(alias_service) = services.get_mut(&alias_key) {
                             alias_service.description = format!("Alias for {target}");
                             alias_service.active_state = target_state.0;
                             alias_service.sub_state = target_state.1;
-                            alias_service.protected |= target_state.2;
                         }
                     } else if let Some(alias_service) = services.get_mut(&alias_key) {
                         alias_service.description = "Alias target state unavailable".to_string();
@@ -754,34 +749,6 @@ fn query_service_scope(user_scope: bool, scope: &str) -> Result<Vec<ServiceSnaps
     Ok(services.into_values().collect())
 }
 
-fn is_protected_system_service(unit: &str) -> bool {
-    unit.starts_with("systemd-")
-        || matches!(
-            unit,
-            "dbus.service"
-                | "polkit.service"
-                | "udisks2.service"
-                | "NetworkManager.service"
-                | "networking.service"
-                | "wpa_supplicant.service"
-                | "display-manager.service"
-                | "gdm.service"
-                | "gdm3.service"
-                | "sddm.service"
-                | "lightdm.service"
-                | "ssh.service"
-                | "sshd.service"
-                | "ufw.service"
-                | "nftables.service"
-                | "avahi-daemon.service"
-                | "multipathd.service"
-                | "console-getty.service"
-        )
-        || ["gdm", "sddm", "lightdm", "user@", "user-runtime-dir@", "getty@", "serial-getty@", "lvm2-", "cryptsetup-"]
-            .iter()
-            .any(|prefix| unit.starts_with(prefix))
-}
-
 #[tauri::command]
 async fn set_service_state(scope: String, unit: String, action: String) -> Result<(), String> {
     if !unit.ends_with(".service")
@@ -798,9 +765,6 @@ async fn set_service_state(scope: String, unit: String, action: String) -> Resul
         "System" => false,
         _ => return Err("This service scope is not supported".to_string()),
     };
-    if !user_scope && is_protected_system_service(&unit) {
-        return Err("Kestrel protects core system, login, network, remote-access, firewall, and disk-management services".to_string());
-    }
     if !query_service_scope(user_scope, &scope)?.iter().any(|service| service.unit == unit) {
         return Err("That service is no longer in the current service list".to_string());
     }

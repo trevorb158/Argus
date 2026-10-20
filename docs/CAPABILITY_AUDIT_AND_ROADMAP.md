@@ -29,7 +29,7 @@ The following capabilities are present in the code at the audited revision. A li
 | Storage | Shows mounted-volume usage; discovers partitions and mount points; uses UDisks for user-confirmed mount and unmount; reads cached SMART health via UDisks when available. SMART self-tests, filesystem repair, formatting, partition creation, and partition deletion are not implemented. |
 | Network | Shows local interface addresses and traffic rates, the configured default route, and resolver addresses. It is an observer today: it does not connect/disconnect Wi-Fi, change IP/DNS/routes, or manage firewall rules. |
 | Startup | Lists local XDG user autostart entries and can enable or disable eligible user-owned entries after confirmation. System-wide startup entries are not editable through Kestrel. |
-| Services | Lists system and user systemd services, filters service states, refreshes status, shows recent service logs, and can start, stop, enable, or disable eligible services after confirmation. Some system services are hard-blocked by an application allow/deny rule described below. |
+| Services | Lists system and user systemd services, filters service states, refreshes status, shows recent service logs, and offers start, stop, enable, or disable for listed services after a consequence-specific confirmation. The former application-level service denylist has been removed; systemd and Linux authorization decide whether a requested action can run. |
 | System information | Shows OS/kernel, processor, memory, architecture, host/session information, uptime, battery charge, battery health estimate and cycle count when exported by Linux, and USB device metadata. USB serial numbers and device contents are not read. |
 | Sensors | Shows temperature sensors and critical limits when the kernel exposes them. It does not control fan curves, GPU power, or other firmware controls. |
 | Recent Logs | Reads recent journal entries from the current boot, supports time/severity/search filtering, can export the filtered view to a user-selected local file, and can show recent logs for a selected service. Logs are not edited or deleted. |
@@ -57,7 +57,7 @@ Some boundaries below are deliberate safety checks. Others are temporary impleme
 
 ### App-imposed blocks to review and expand
 
-1. **A hard-coded system-service protection list.** `is_protected_system_service` blocks start, stop, enable, and disable for named services and service-name prefixes, including systemd, Polkit, UDisks, NetworkManager, Wi-Fi support, display managers, SSH, firewall services, Avahi, storage/volume services, and login/getty services. The UI displays these as “Protected”; the backend rejects the request even if the user confirms. This is the clearest current mismatch with the full-control goal. Replace the blanket list with a warning that names the service and likely effects, a distinct confirmation for disruptive services, and normal administrator authorization. Keep only operations that Linux itself cannot perform or that would terminate Kestrel's own required operation unavailable, and explain those cases precisely.
+1. **Service impact visibility remains incomplete.** The former hard-coded denylist (including systemd, Polkit, UDisks, NetworkManager, Wi-Fi, display managers, SSH, firewall, storage, and login services) has been removed. Each service action now requires confirmation and the dialog calls out known effects for common critical service groups; system-wide actions use normal Linux authorization. These warnings are practical guidance, not a complete dependency analysis. A later improvement should inspect reverse dependencies and explain the exact units systemd will also affect before confirmation.
 
 2. **System-wide startup entries are read-only.** The toggle command only edits a user-owned `.desktop` entry under the current account's autostart folder. Add system-wide entry inspection and editing via a narrow privileged operation with a before/after preview, backup, confirmation, authorization, and rollback.
 
@@ -108,7 +108,9 @@ Deliver one tested vertical slice and one Git commit at a time. Update this docu
 
 ### 1. Replace hard-coded privilege blocks with an informed action system
 
-- Remove the app-level protected system-service deny list where an operation is technically available.
+- [x] Remove the app-level protected system-service deny list and offer the available systemd actions with confirmation.
+- [x] Add tailored consequence notices for common network, graphical-session, remote-access, firewall, storage, and core services.
+- [ ] Add exact dependency and cascading-action previews from systemd before service changes.
 - Add per-action scope/risk descriptions, confirmation, Polkit authorization, progress, cancellation where supported, and actionable errors.
 - Add system-wide startup controls and an elevated process-signal retry.
 - Add an operation history with timestamp, action, target, result, and recovery guidance; omit sensitive command arguments and secrets.

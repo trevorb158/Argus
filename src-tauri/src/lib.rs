@@ -1441,6 +1441,55 @@ fn get_partitions() -> Result<Vec<PartitionSnapshot>, String> {
     Ok(partitions)
 }
 
+fn is_system_critical_mount(path: &str) -> bool {
+    ["/", "/boot", "/home", "/usr", "/var", "/etc", "/bin", "/sbin", "/lib", "/lib64", "/opt", "/run"]
+        .iter()
+        .any(|root| path == *root || (*root != "/" && path.starts_with(&format!("{root}/"))))
+        || path == "/"
+}
+
+fn change_partition_mount(path: String, mount: bool) -> Result<String, String> {
+    let partitions = get_partitions()?;
+    let partition = partitions
+        .into_iter()
+        .find(|partition| partition.path == path && partition.device_type == "part")
+        .ok_or_else(|| "Select a valid partition from the current storage list".to_string())?;
+    let mounted_paths = partition.mount_points.iter().filter(|point| point.as_str() != "[SWAP]").collect::<Vec<_>>();
+
+    if mount && !mounted_paths.is_empty() {
+        return Err("This partition is already mounted".to_string());
+    }
+    if !mount {
+        if mounted_paths.is_empty() {
+            return Err("This partition is not mounted".to_string());
+        }
+        if partition.mount_points.iter().any(|point| point == "[SWAP]") {
+            return Err("Active swap cannot be unmounted from this page".to_string());
+        }
+        if mounted_paths.iter().any(|point| is_system_critical_mount(point)) {
+            return Err("Kestrel will not unmount a system-critical volume".to_string());
+        }
+    }
+
+    let action = if mount { "mount" } else { "unmount" };
+    let output = Command::new("udisksctl")
+        .args([action, "--block-device", path.as_str()])
+        .output()
+        .map_err(|error| format!("Could not start udisksctl: {error}"))?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if message.is_empty() { format!("Linux could not {action} this partition") } else { message });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[tauri::command]
+async fn set_partition_mounted(path: String, mount: bool) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || change_partition_mount(path, mount))
+        .await
+        .map_err(|error| format!("The partition operation could not finish: {error}"))?
+}
+
 #[tauri::command]
 fn get_storage() -> Vec<DriveSnapshot> {
     let disks = Disks::new_with_refreshed_list();
@@ -1486,6 +1535,7 @@ pub fn run() {
             set_startup_enabled,
             get_storage,
             get_partitions,
+            set_partition_mounted,
             get_processes,
             scan_large_files,
             get_cache_inventory,

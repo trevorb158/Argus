@@ -748,6 +748,27 @@ h1 {
   min-height: 100px;
 }
 
+.storage-message.compact.success,
+.storage-message.compact.error {
+  min-height: 0;
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  place-items: start;
+  border-style: solid;
+  text-align: left;
+  line-height: 1.5;
+}
+
+.storage-message.compact.success {
+  border-color: #29473e;
+  color: #9be3cc;
+}
+
+.storage-message.compact.error {
+  border-color: #593a3a;
+  color: #edaaaa;
+}
+
 .partition-inventory {
   margin-top: 22px;
 }
@@ -780,7 +801,7 @@ h1 {
 
 .partition-row {
   display: grid;
-  grid-template-columns: 32px minmax(150px, 1.5fr) minmax(90px, 0.6fr) minmax(140px, 1fr);
+  grid-template-columns: 32px minmax(150px, 1.5fr) minmax(90px, 0.6fr) minmax(140px, 1fr) auto;
   align-items: center;
   gap: 14px;
   padding: 13px 15px;
@@ -862,6 +883,32 @@ h1 {
 .partition-mount-state.mounted .partition-state-dot {
   background: #67d5b2;
   box-shadow: 0 0 8px rgba(103, 213, 178, 0.4);
+}
+
+.partition-action-button {
+  min-width: 74px;
+  padding: 7px 10px;
+  border: 1px solid #33443f;
+  border-radius: 7px;
+  background: #17231f;
+  color: #9be3cc;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.partition-action-button:hover:not(:disabled) {
+  border-color: #67d5b2;
+  background: #1b2c26;
+}
+
+.partition-action-button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.partition-action-unavailable {
+  min-width: 74px;
 }
 
 .storage-footnote {
@@ -1950,6 +1997,12 @@ h1 {
   .partition-mount-state {
     grid-column: 2 / -1;
     padding-left: 1px;
+  }
+
+  .partition-action-button,
+  .partition-action-unavailable {
+    grid-column: 2 / -1;
+    justify-self: start;
   }
   .storage-page-toolbar {
     align-items: stretch;

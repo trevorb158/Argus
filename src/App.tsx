@@ -258,6 +258,9 @@ function App() {
   const [partitions, setPartitions] = useState<PartitionSnapshot[]>([]);
   const [partitionError, setPartitionError] = useState<string | null>(null);
   const [partitionLoading, setPartitionLoading] = useState(false);
+  const [partitionRefreshKey, setPartitionRefreshKey] = useState(0);
+  const [partitionActionPath, setPartitionActionPath] = useState<string | null>(null);
+  const [partitionActionStatus, setPartitionActionStatus] = useState<StartupActionStatus | null>(null);
   const [networkInterfaces, setNetworkInterfaces] = useState<NetworkInterfaceSnapshot[]>([]);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [networkLoading, setNetworkLoading] = useState(false);
@@ -478,7 +481,7 @@ function App() {
       active = false;
       window.clearTimeout(timeoutId);
     };
-  }, [page]);
+  }, [page, partitionRefreshKey]);
 
   useEffect(() => {
     if (page !== "performance") return;
@@ -956,6 +959,32 @@ function App() {
       direction:
         current.key === key && current.direction === "desc" ? "asc" : "desc",
     }));
+  }
+
+  async function requestPartitionMount(partition: PartitionSnapshot, mount: boolean) {
+    if (partition.deviceType !== "part" || partitionActionPath) return;
+    if (!mount) {
+      const mountPoints = partition.mountPoints.filter((point) => point !== "[SWAP]");
+      const confirmed = window.confirm(
+        `Unmount ${partition.path}?\n\nFiles and apps using ${mountPoints.join(", ") || "this volume"} may become unavailable. Kestrel will use Linux’s normal unmount process and will not force it.`,
+      );
+      if (!confirmed) return;
+    }
+
+    setPartitionActionPath(partition.path);
+    setPartitionActionStatus(null);
+    try {
+      const result = await invoke<string>("set_partition_mounted", { path: partition.path, mount });
+      setPartitionActionStatus({
+        kind: "success",
+        message: result || `${partition.path} ${mount ? "mounted" : "unmounted"} successfully.`,
+      });
+      setPartitionRefreshKey((current) => current + 1);
+    } catch (error) {
+      setPartitionActionStatus({ kind: "error", message: String(error) });
+    } finally {
+      setPartitionActionPath(null);
+    }
   }
 
   async function requestStartupToggle(startupApp: StartupAppSnapshot) {
@@ -1916,6 +1945,12 @@ function App() {
                 </div>
               </div>
 
+              {partitionActionStatus && (
+                <div className={`storage-message compact ${partitionActionStatus.kind}`} role={partitionActionStatus.kind === "error" ? "alert" : "status"}>
+                  {partitionActionStatus.message}
+                </div>
+              )}
+
               {partitionError ? (
                 <div className="storage-message compact" role="alert">
                   Could not read the partition inventory: {partitionError}
@@ -1949,6 +1984,16 @@ function App() {
                           <span className="partition-state-dot" />
                           <span>{mountSummary}</span>
                         </div>
+                        {partition.deviceType === "part" && !isActiveSwap ? (
+                          <button
+                            className="partition-action-button"
+                            type="button"
+                            disabled={partitionActionPath !== null}
+                            onClick={() => void requestPartitionMount(partition, !isMounted)}
+                          >
+                            {partitionActionPath === partition.path ? "Working…" : isMounted ? "Unmount" : "Mount"}
+                          </button>
+                        ) : <span className="partition-action-unavailable">{isActiveSwap ? "In use as swap" : ""}</span>}
                       </article>
                     );
                   })}
@@ -1956,7 +2001,7 @@ function App() {
               )}
             </section>
             <p className="storage-footnote">
-              Linux supplies this read-only partition inventory. Used and free space are shown above for mounted volumes; unmounted partitions show capacity only. Kestrel does not mount or repair drives.
+              Mount and unmount use Linux’s UDisks authorization. Unmounting requires confirmation; active swap and system-critical mounts are protected. Filesystem repair is not performed here.
             </p>
           </section>
         ) : page === "network" ? (

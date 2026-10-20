@@ -32,8 +32,10 @@ npm run tauri build
 
 ## Product principles
 
-- Keep system readings local to the device.
+- Keep Kestrel’s monitoring and management work on the local device unless the user explicitly chooses an external connection or export.
+- Aim to expose the full practical range of local computer management through supported Linux interfaces; do not impose blanket restrictions on capable features.
 - Clearly distinguish implemented features from planned ones.
-- Make state-changing actions explicit and explain their scope.
+- Before sensitive changes, explain what will change, which users or devices are affected, and the likely consequences; ask for confirmation and use normal operating-system authorization where required.
+- Match safeguards to the impact of an action, and support recovery or reversal where the system allows it.
 - Keep background work proportional to the active view.
 - Prefer Linux-native interfaces and report unavailable readings honestly.

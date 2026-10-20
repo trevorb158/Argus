@@ -2,7 +2,7 @@ use std::process::Command;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use sysinfo::{Disks, Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
+use sysinfo::{Components, Disks, Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -10,6 +10,13 @@ struct TelemetrySnapshot {
     cpu_usage_percent: f32,
     memory_used_bytes: u64,
     memory_total_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TemperatureSnapshot {
+    label: String,
+    temperature_celsius: f32,
 }
 
 #[derive(Serialize)]
@@ -117,6 +124,26 @@ fn get_telemetry(
         memory_used_bytes: system.used_memory(),
         memory_total_bytes: system.total_memory(),
     })
+}
+
+#[tauri::command]
+fn get_temperatures() -> Vec<TemperatureSnapshot> {
+    let components = Components::new_with_refreshed_list();
+
+    components
+        .list()
+        .iter()
+        .filter_map(|component| {
+            let temperature_celsius = component.temperature()?;
+            if !temperature_celsius.is_finite() {
+                return None;
+            }
+            Some(TemperatureSnapshot {
+                label: component.label().to_string(),
+                temperature_celsius,
+            })
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -244,6 +271,7 @@ pub fn run() {
         .manage(TelemetryState(Mutex::new(system)))
         .invoke_handler(tauri::generate_handler![
             get_telemetry,
+            get_temperatures,
             get_storage,
             get_partitions,
             get_processes,

@@ -8,6 +8,11 @@ type TelemetrySnapshot = {
   memoryTotalBytes: number;
 };
 
+type TemperatureSnapshot = {
+  label: string;
+  temperatureCelsius: number;
+};
+
 type DriveSnapshot = {
   name: string;
   mountPoint: string;
@@ -77,6 +82,9 @@ function App() {
   const [page, setPage] = useState<AppPage>("overview");
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot | null>(null);
   const [telemetryError, setTelemetryError] = useState<string | null>(null);
+  const [temperatures, setTemperatures] = useState<TemperatureSnapshot[]>([]);
+  const [temperatureError, setTemperatureError] = useState<string | null>(null);
+  const [temperatureLoading, setTemperatureLoading] = useState(false);
   const [history, setHistory] = useState<HistorySample[]>([]);
   const [historyWindow, setHistoryWindow] = useState(300);
   const [drives, setDrives] = useState<DriveSnapshot[]>([]);
@@ -144,6 +152,40 @@ function App() {
       window.clearInterval(intervalId);
     };
   }, []);
+
+  useEffect(() => {
+    if (page !== "overview") return;
+
+    let active = true;
+    let timeoutId = 0;
+    setTemperatureLoading(true);
+
+    async function refreshTemperatures() {
+      try {
+        const snapshot = await invoke<TemperatureSnapshot[]>("get_temperatures");
+        if (active) {
+          setTemperatures(snapshot);
+          setTemperatureError(null);
+        }
+      } catch (error) {
+        if (active) {
+          setTemperatures([]);
+          setTemperatureError(String(error));
+        }
+      } finally {
+        if (active) {
+          setTemperatureLoading(false);
+          timeoutId = window.setTimeout(() => void refreshTemperatures(), 5000);
+        }
+      }
+    }
+
+    void refreshTemperatures();
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [page]);
 
   useEffect(() => {
     let active = true;
@@ -244,6 +286,14 @@ function App() {
         )
       : 0;
 
+  const hottestTemperature = temperatures.reduce<TemperatureSnapshot | null>(
+    (hottest, sensor) =>
+      !hottest || sensor.temperatureCelsius > hottest.temperatureCelsius
+        ? sensor
+        : hottest,
+    null,
+  );
+
   const metrics = [
     {
       label: "Processor",
@@ -261,8 +311,16 @@ function App() {
     },
     {
       label: "Temperature",
-      value: "—",
-      detail: "Sensor readings come in a later step",
+      value: hottestTemperature
+        ? `${Math.round(hottestTemperature.temperatureCelsius)}°C`
+        : "Unavailable",
+      detail: hottestTemperature
+        ? `${hottestTemperature.label || "System sensor"} · highest available reading`
+        : temperatureError
+          ? "Could not read hardware sensors"
+          : temperatureLoading
+            ? "Checking for sensors"
+            : "No readable temperature sensors",
       icon: "°C",
     },
   ];

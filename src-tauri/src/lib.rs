@@ -455,12 +455,12 @@ fn get_diagnostics_snapshot(
 }
 
 #[tauri::command]
-fn save_diagnostics_report(path: String, report: String) -> Result<(), String> {
+fn save_text_file(path: String, contents: String) -> Result<(), String> {
     let path = PathBuf::from(path);
     if path.extension().and_then(|extension| extension.to_str()) != Some("txt") {
-        return Err("Choose a .txt file for the diagnostics report".to_string());
+        return Err("Choose a .txt file".to_string());
     }
-    fs::write(&path, report).map_err(|error| format!("Could not save diagnostics report: {error}"))
+    fs::write(&path, contents).map_err(|error| format!("Could not save the text file: {error}"))
 }
 
 fn parse_desktop_entry(path: &Path, source: &str) -> Result<StartupAppSnapshot, String> {
@@ -1420,7 +1420,7 @@ pub fn run() {
             get_system_info,
             get_performance_snapshot,
             get_diagnostics_snapshot,
-            save_diagnostics_report,
+            save_text_file,
             get_temperatures,
             get_network_interfaces,
             get_startup_apps,

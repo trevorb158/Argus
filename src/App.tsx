@@ -171,6 +171,12 @@ function formatGiB(bytes: number) {
   return (bytes / 1024 ** 3).toFixed(1);
 }
 
+function formatSystemLogTimestamp(timestampMicros: number) {
+  if (!timestampMicros) return "Time unavailable";
+  const date = new Date(timestampMicros / 1000);
+  return Number.isNaN(date.getTime()) ? "Time unavailable" : date.toLocaleString();
+}
+
 function formatProcessMemory(bytes: number) {
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
   if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MiB`;
@@ -288,6 +294,8 @@ function App() {
   const [systemLogsQuery, setSystemLogsQuery] = useState("");
   const [systemLogsSeverity, setSystemLogsSeverity] = useState<LogSeverityFilter>("all");
   const [systemLogsRefreshKey, setSystemLogsRefreshKey] = useState(0);
+  const [systemLogsExporting, setSystemLogsExporting] = useState(false);
+  const [systemLogsStatus, setSystemLogsStatus] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const previousNetworkCounters = useRef<Record<string, {
     receivedBytes: number;
     transmittedBytes: number;
@@ -1034,12 +1042,42 @@ function App() {
         setDiagnosticsStatus({ kind: "success", message: "Save cancelled. The report has not been written." });
         return;
       }
-      await invoke("save_diagnostics_report", { path, report: diagnosticsReport });
+      await invoke("save_text_file", { path, contents: diagnosticsReport });
       setDiagnosticsStatus({ kind: "success", message: "Diagnostics report saved." });
     } catch (error) {
       setDiagnosticsStatus({ kind: "error", message: `Could not save the report: ${String(error)}` });
     } finally {
       setDiagnosticsSaving(false);
+    }
+  }
+
+  async function exportSystemLogs() {
+    if (filteredSystemLogs.length === 0) return;
+    setSystemLogsExporting(true);
+    setSystemLogsStatus(null);
+    try {
+      const path = await save({
+        title: "Export filtered Kestrel system logs",
+        defaultPath: "kestrel-system-logs.txt",
+        filters: [{ name: "Text log", extensions: ["txt"] }],
+      });
+      if (!path) return;
+      const lines = [
+        "Kestrel recent system logs",
+        `Exported: ${new Date().toLocaleString()}`,
+        `Entries: ${filteredSystemLogs.length}`,
+        "",
+        ...filteredSystemLogs.map((entry) => {
+          const date = entry.timestampMicros ? new Date(entry.timestampMicros / 1000).toISOString() : "Time unavailable";
+          return `[${date}] [${entry.severity}] ${entry.source}: ${entry.message}`;
+        }),
+      ].join("\n");
+      await invoke("save_text_file", { path, contents: lines });
+      setSystemLogsStatus({ kind: "success", message: "Filtered log entries saved." });
+    } catch (error) {
+      setSystemLogsStatus({ kind: "error", message: `Could not export log entries: ${String(error)}` });
+    } finally {
+      setSystemLogsExporting(false);
     }
   }
 
@@ -2359,8 +2397,16 @@ function App() {
                 <button className="startup-refresh-button" onClick={() => setSystemLogsRefreshKey((value) => value + 1)} disabled={systemLogsLoading}>
                   {systemLogsLoading ? "Refreshing…" : "Refresh"}
                 </button>
+                <button className="startup-refresh-button" onClick={() => void exportSystemLogs()} disabled={systemLogsExporting || filteredSystemLogs.length === 0}>
+                  {systemLogsExporting ? "Exporting…" : "Export filtered"}
+                </button>
               </div>
             </div>
+            {systemLogsStatus && (
+              <div className={systemLogsStatus.kind === "error" ? "process-action-message error" : "process-action-message"} role={systemLogsStatus.kind === "error" ? "alert" : "status"}>
+                {systemLogsStatus.message}
+              </div>
+            )}
             {systemLogsError ? (
               <div className="storage-message" role="alert">Could not read recent system messages: {systemLogsError}</div>
             ) : systemLogsLoading && systemLogs.length === 0 ? (
@@ -2373,7 +2419,7 @@ function App() {
                   <article className={`log-entry severity-${entry.severity.toLocaleLowerCase()}`} key={`${entry.timestampMicros}-${index}`} role="listitem">
                     <div className="log-entry-meta">
                       <time dateTime={entry.timestampMicros ? new Date(entry.timestampMicros / 1000).toISOString() : undefined}>
-                        {entry.timestampMicros ? new Date(entry.timestampMicros / 1000).toLocaleString() : "Time unavailable"}
+                        {formatSystemLogTimestamp(entry.timestampMicros)}
                       </time>
                       <span className="log-severity">{entry.severity}</span>
                       <strong title={entry.source}>{entry.source}</strong>

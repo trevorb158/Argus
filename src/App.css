@@ -2736,6 +2736,7 @@ h1 {
 }
 
 .logs-severity-label select,
+.logs-range-label select,
 .logs-search {
   min-height: 34px;
   border: 1px solid #29313b;
@@ -2746,7 +2747,8 @@ h1 {
   font-size: 10px;
 }
 
-.logs-severity-label select {
+.logs-severity-label select,
+.logs-range-label select {
   padding: 0 10px;
 }
 

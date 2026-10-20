@@ -139,6 +139,7 @@ type SystemLogEntry = {
   message: string;
 };
 type LogSeverityFilter = "all" | "errors" | "warnings" | "info" | "debug";
+type LogTimeRange = "all" | "1h" | "6h" | "24h";
 
 type ProcessSnapshot = {
   pid: number;
@@ -293,6 +294,7 @@ function App() {
   const [systemLogsError, setSystemLogsError] = useState<string | null>(null);
   const [systemLogsQuery, setSystemLogsQuery] = useState("");
   const [systemLogsSeverity, setSystemLogsSeverity] = useState<LogSeverityFilter>("all");
+  const [systemLogsTimeRange, setSystemLogsTimeRange] = useState<LogTimeRange>("all");
   const [systemLogsRefreshKey, setSystemLogsRefreshKey] = useState(0);
   const [systemLogsExporting, setSystemLogsExporting] = useState(false);
   const [systemLogsStatus, setSystemLogsStatus] = useState<{ kind: "success" | "error"; message: string } | null>(null);
@@ -819,6 +821,8 @@ function App() {
 
   const filteredSystemLogs = systemLogs.filter((entry) => {
     const query = systemLogsQuery.trim().toLocaleLowerCase();
+    const rangeHours = systemLogsTimeRange === "1h" ? 1 : systemLogsTimeRange === "6h" ? 6 : systemLogsTimeRange === "24h" ? 24 : null;
+    const inTimeRange = rangeHours === null || (entry.timestampMicros > 0 && entry.timestampMicros >= Date.now() * 1000 - rangeHours * 60 * 60 * 1_000_000);
     const matchesQuery = !query || entry.message.toLocaleLowerCase().includes(query) || entry.source.toLocaleLowerCase().includes(query);
     const priority = ["Emergency", "Alert", "Critical", "Error"].includes(entry.severity)
       ? "errors"
@@ -827,7 +831,7 @@ function App() {
         : entry.severity === "Debug"
           ? "debug"
           : "info";
-    return matchesQuery && (systemLogsSeverity === "all" || priority === systemLogsSeverity);
+    return inTimeRange && matchesQuery && (systemLogsSeverity === "all" || priority === systemLogsSeverity);
   });
 
   const filteredProcesses = processes
@@ -2379,6 +2383,15 @@ function App() {
                 <p>{filteredSystemLogs.length} of {systemLogs.length} entries · latest 300 from this boot</p>
               </div>
               <div className="logs-controls">
+                <label className="logs-range-label">
+                  <span className="sr-only">Filter logs by time range</span>
+                  <select value={systemLogsTimeRange} onChange={(event) => setSystemLogsTimeRange(event.target.value as LogTimeRange)}>
+                    <option value="all">All captured times</option>
+                    <option value="1h">Last hour</option>
+                    <option value="6h">Last 6 hours</option>
+                    <option value="24h">Last 24 hours</option>
+                  </select>
+                </label>
                 <label className="logs-severity-label">
                   <span className="sr-only">Filter logs by severity</span>
                   <select value={systemLogsSeverity} onChange={(event) => setSystemLogsSeverity(event.target.value as LogSeverityFilter)}>

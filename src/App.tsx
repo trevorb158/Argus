@@ -58,6 +58,7 @@ type ServiceSnapshot = {
   activeState: string;
   subState: string;
   startupState: string;
+  protected: boolean;
 };
 
 type ServiceInventory = { services: ServiceSnapshot[]; warnings: string[] };
@@ -1074,22 +1075,24 @@ function App() {
     }
   }
 
-  async function requestUserServiceAction(service: ServiceSnapshot, action: "start" | "stop" | "enable" | "disable") {
-    if (service.scope !== "User" || serviceActionUnit !== null) return;
+  async function requestServiceAction(service: ServiceSnapshot, action: "start" | "stop" | "enable" | "disable") {
+    if (serviceActionUnit !== null) return;
     const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
+    const scopeDescription = service.scope === "System" ? "system-wide" : "user session";
     const detail = action === "stop"
-      ? "This may interrupt apps or background work that depend on it."
+      ? "This may interrupt apps or system functions that depend on it."
       : action === "disable"
-        ? "This prevents it from starting automatically in your user session. It will not stop a running instance."
+        ? `This prevents it from starting automatically in your ${scopeDescription}. It will not stop a running instance.`
         : action === "enable"
-          ? "This allows it to start automatically in your user session."
-          : "This starts it in your user session now.";
-    if (!window.confirm(`${actionLabel} user service ${service.unit}?\n\n${detail}`)) return;
+          ? `This allows it to start automatically in your ${scopeDescription}.`
+          : `This starts it in your ${scopeDescription} now.`;
+    const authorization = service.scope === "System" ? " Linux may ask for administrator authorization." : "";
+    if (!window.confirm(`${actionLabel} ${service.scope === "System" ? "system" : "user"} service ${service.unit}?\n\n${detail}${authorization}`)) return;
 
     setServiceActionUnit(service.unit);
     setServiceActionStatus(null);
     try {
-      await invoke("set_user_service_state", { unit: service.unit, action });
+      await invoke("set_service_state", { scope: service.scope, unit: service.unit, action });
       setServiceActionStatus({ kind: "success", message: `${service.unit}: ${actionLabel.toLowerCase()} request completed.` });
       setServiceRefreshKey((key) => key + 1);
     } catch (error) {
@@ -2215,7 +2218,7 @@ function App() {
             <div className="services-toolbar">
               <div>
                 <h2 id="services-page-title">System and user services</h2>
-                <p>{serviceLoading && services.length === 0 ? "Reading service managers…" : `${filteredServices.length} of ${services.length} services · user services have controls`}</p>
+                <p>{serviceLoading && services.length === 0 ? "Reading service managers…" : `${filteredServices.length} of ${services.length} services · available system and user controls`}</p>
               </div>
               <div className="services-toolbar-actions">
                 <label className="services-search">
@@ -2287,28 +2290,30 @@ function App() {
                     </span>
                     <span className="service-startup-state">{service.startupState}</span>
                     <span className={`service-scope${service.scope === "User" ? " user" : ""}`}>{service.scope}</span>
-                    {service.scope === "User" ? (
-                      <div className="service-row-actions">
+                    {service.protected ? (
+                      <span className="service-row-actions read-only">Protected</span>
+                    ) : (
+                    <div className={`service-row-actions${service.scope === "System" ? " system" : ""}`}>
                         {service.activeState === "active" ? (
-                          <button className="service-action-button stop" type="button" disabled={serviceActionUnit !== null} onClick={() => void requestUserServiceAction(service, "stop")}>
+                          <button className="service-action-button stop" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "stop")}>
                             {serviceActionUnit === service.unit ? "Working…" : "Stop"}
                           </button>
                         ) : ["inactive", "failed"].includes(service.activeState) ? (
-                          <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} onClick={() => void requestUserServiceAction(service, "start")}>
+                          <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "start")}>
                             {serviceActionUnit === service.unit ? "Working…" : "Start"}
                           </button>
                         ) : null}
                         {service.startupState === "enabled" ? (
-                          <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} onClick={() => void requestUserServiceAction(service, "disable")}>
-                            Disable
+                          <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "disable")}>
+                            {serviceActionUnit === service.unit ? "Working…" : "Disable"}
                           </button>
                         ) : service.startupState === "disabled" ? (
-                          <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} onClick={() => void requestUserServiceAction(service, "enable")}>
-                            Enable
+                          <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "enable")}>
+                            {serviceActionUnit === service.unit ? "Working…" : "Enable"}
                           </button>
                         ) : null}
-                      </div>
-                    ) : <span className="service-row-actions read-only">Read only</span>}
+                    </div>
+                    )}
                   </article>
                 ))}
               </div>
@@ -2322,7 +2327,7 @@ function App() {
               </button>
             )}
             <p className="service-footnote">
-              Service status comes from the systemd system and user managers. Kestrel can start or stop user services and change their user-session startup setting after confirmation. System-wide services remain read-only.
+              Service status comes from the systemd system and user managers. Service actions require confirmation; Linux may request administrator authorization for system-wide changes. Core system, login, network, remote-access, firewall, and disk-management services are protected.
             </p>
           </section>
         ) : page === "system" ? (

@@ -1123,6 +1123,12 @@ h1 {
   gap: 6px;
 }
 
+.service-row-actions.system .service-action-button {
+  border-color: #514832;
+  background: #242117;
+  color: #e5cb91;
+}
+
 .service-row-actions.read-only {
   color: #75818f;
   font-size: 9px;

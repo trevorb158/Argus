@@ -118,6 +118,7 @@ struct ServiceSnapshot {
     active_state: String,
     sub_state: String,
     startup_state: String,
+    protected: bool,
 }
 
 #[derive(Serialize)]
@@ -570,6 +571,7 @@ fn query_service_scope(user_scope: bool, scope: &str) -> Result<Vec<ServiceSnaps
         &["list-unit-files", "--type=service", "--no-legend", "--no-pager"],
     )?;
     let mut services = BTreeMap::<String, ServiceSnapshot>::new();
+    let mut alias_units = Vec::new();
 
     for line in active_units.lines() {
         let fields = line.split_whitespace().collect::<Vec<_>>();
@@ -578,6 +580,7 @@ fn query_service_scope(user_scope: bool, scope: &str) -> Result<Vec<ServiceSnaps
         }
         let unit = fields[0].to_string();
         let key = format!("{scope}:{unit}");
+        let protected = scope == "System" && is_protected_system_service(&unit);
         services.insert(key, ServiceSnapshot {
             unit,
             description: fields[4..].join(" "),
@@ -585,6 +588,7 @@ fn query_service_scope(user_scope: bool, scope: &str) -> Result<Vec<ServiceSnaps
             active_state: fields[2].to_string(),
             sub_state: fields[3].to_string(),
             startup_state: "unknown".to_string(),
+            protected,
         });
     }
 
@@ -594,6 +598,9 @@ fn query_service_scope(user_scope: bool, scope: &str) -> Result<Vec<ServiceSnaps
             continue;
         }
         let unit = fields[0].to_string();
+        if fields[1] == "alias" {
+            alias_units.push(unit.clone());
+        }
         let key = format!("{scope}:{unit}");
         let service = services.entry(key).or_insert_with(|| ServiceSnapshot {
             unit: unit.clone(),
@@ -602,39 +609,138 @@ fn query_service_scope(user_scope: bool, scope: &str) -> Result<Vec<ServiceSnaps
             active_state: "inactive".to_string(),
             sub_state: "dead".to_string(),
             startup_state: "unknown".to_string(),
+            protected: scope == "System" && is_protected_system_service(&unit),
         });
         service.startup_state = fields[1].to_string();
+    }
+
+    let query_aliases = alias_units
+        .iter()
+        .filter(|unit| !unit.contains("@."))
+        .collect::<Vec<_>>();
+    if !query_aliases.is_empty() {
+        let mut command = Command::new("systemctl");
+        if user_scope {
+            command.arg("--user");
+        }
+        let alias_output = command
+            .args(["show", "--property=Id", "--value"])
+            .args(&query_aliases)
+            .output();
+        if let Ok(output) = alias_output {
+            if output.status.success() {
+                let targets = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .map(|line| line.trim().to_string())
+                    .collect::<Vec<_>>();
+                for (alias, target) in query_aliases.iter().zip(targets) {
+                    let alias_key = format!("{scope}:{alias}");
+                    let target_key = format!("{scope}:{target}");
+                    if let Some(target_state) = services.get(&target_key).map(|service| {
+                        (service.active_state.clone(), service.sub_state.clone(), service.protected)
+                    }) {
+                        if let Some(alias_service) = services.get_mut(&alias_key) {
+                            alias_service.description = format!("Alias for {target}");
+                            alias_service.active_state = target_state.0;
+                            alias_service.sub_state = target_state.1;
+                            alias_service.protected |= target_state.2;
+                        }
+                    } else if let Some(alias_service) = services.get_mut(&alias_key) {
+                        alias_service.description = "Alias target state unavailable".to_string();
+                        alias_service.active_state = "unknown".to_string();
+                        alias_service.sub_state.clear();
+                    }
+                }
+            } else {
+                for alias in &query_aliases {
+                    if let Some(alias_service) = services.get_mut(&format!("{scope}:{alias}")) {
+                        alias_service.description = "Alias target state unavailable".to_string();
+                        alias_service.active_state = "unknown".to_string();
+                        alias_service.sub_state.clear();
+                    }
+                }
+            }
+        }
+    }
+
+    for alias in alias_units.iter().filter(|unit| unit.contains("@.")) {
+        if let Some(alias_service) = services.get_mut(&format!("{scope}:{alias}")) {
+            alias_service.description = "Template alias; no instance selected".to_string();
+            alias_service.active_state = "unknown".to_string();
+            alias_service.sub_state.clear();
+        }
     }
 
     Ok(services.into_values().collect())
 }
 
+fn is_protected_system_service(unit: &str) -> bool {
+    unit.starts_with("systemd-")
+        || matches!(
+            unit,
+            "dbus.service"
+                | "polkit.service"
+                | "udisks2.service"
+                | "NetworkManager.service"
+                | "networking.service"
+                | "wpa_supplicant.service"
+                | "display-manager.service"
+                | "gdm.service"
+                | "gdm3.service"
+                | "sddm.service"
+                | "lightdm.service"
+                | "ssh.service"
+                | "sshd.service"
+                | "ufw.service"
+                | "nftables.service"
+                | "avahi-daemon.service"
+                | "multipathd.service"
+                | "console-getty.service"
+        )
+        || ["gdm", "sddm", "lightdm", "user@", "user-runtime-dir@", "getty@", "serial-getty@", "lvm2-", "cryptsetup-"]
+            .iter()
+            .any(|prefix| unit.starts_with(prefix))
+}
+
 #[tauri::command]
-async fn set_user_service_state(unit: String, action: String) -> Result<(), String> {
+async fn set_service_state(scope: String, unit: String, action: String) -> Result<(), String> {
     if !unit.ends_with(".service")
         || unit.starts_with('-')
         || !unit.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"@._:-".contains(&byte))
     {
-        return Err("Select a valid user service from the current list".to_string());
+        return Err("Select a valid service from the current list".to_string());
     }
     if !matches!(action.as_str(), "start" | "stop" | "enable" | "disable") {
         return Err("This service action is not supported".to_string());
     }
-    if !query_service_scope(true, "User")?.iter().any(|service| service.unit == unit) {
-        return Err("That user service is no longer in the current service list".to_string());
+    let user_scope = match scope.as_str() {
+        "User" => true,
+        "System" => false,
+        _ => return Err("This service scope is not supported".to_string()),
+    };
+    if !user_scope && is_protected_system_service(&unit) {
+        return Err("Kestrel protects core system, login, network, remote-access, firewall, and disk-management services".to_string());
+    }
+    if !query_service_scope(user_scope, &scope)?.iter().any(|service| service.unit == unit) {
+        return Err("That service is no longer in the current service list".to_string());
     }
 
     tauri::async_runtime::spawn_blocking(move || {
-        let output = Command::new("systemctl")
-            .args(["--user", action.as_str(), unit.as_str()])
+        let mut command = Command::new("systemctl");
+        if user_scope {
+            command.arg("--user");
+        }
+        let output = command
+            .args([action.as_str(), unit.as_str()])
             .output()
-            .map_err(|error| format!("Could not start the user service manager: {error}"))?;
+            .map_err(|error| format!("Could not start the {scope} service manager: {error}"))?;
         if output.status.success() {
             Ok(())
         } else {
             let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
             Err(if message.is_empty() {
-                format!("The user service manager could not {action} {unit}")
+                format!("The {scope} service manager could not {action} {unit}. Administrator authorization may be required.")
             } else {
                 message
             })
@@ -1587,7 +1693,7 @@ pub fn run() {
             get_network_interfaces,
             get_startup_apps,
             get_services,
-            set_user_service_state,
+            set_service_state,
             set_startup_enabled,
             get_storage,
             get_partitions,

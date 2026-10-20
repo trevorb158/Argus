@@ -165,6 +165,16 @@ struct NetworkInterfaceSnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct NetworkRouteSnapshot {
+    default_gateway: Option<String>,
+    default_interface: Option<String>,
+    dns_servers: Vec<String>,
+    gateway_error: Option<String>,
+    dns_error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PartitionSnapshot {
     name: String,
     path: String,
@@ -981,6 +991,43 @@ fn get_network_interfaces() -> Vec<NetworkInterfaceSnapshot> {
         .collect::<Vec<_>>();
     interfaces.sort_by(|a, b| a.name.cmp(&b.name));
     interfaces
+}
+
+#[tauri::command]
+fn get_network_route_info() -> NetworkRouteSnapshot {
+    let mut default_gateway = None;
+    let mut default_interface = None;
+    let mut gateway_error = None;
+    for family in ["-4", "-6"] {
+        match Command::new("ip").args(["-json", family, "route", "show", "default"]).output() {
+            Ok(output) if output.status.success() => {
+                if let Ok(routes) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                    if let Some(route) = routes.as_array().and_then(|routes| routes.first()) {
+                        default_gateway = route.get("gateway").and_then(serde_json::Value::as_str).map(str::to_string);
+                        default_interface = route.get("dev").and_then(serde_json::Value::as_str).map(str::to_string);
+                        if default_gateway.is_some() || default_interface.is_some() { break; }
+                    }
+                }
+            }
+            Ok(output) => {
+                if gateway_error.is_none() {
+                    gateway_error = Some(String::from_utf8_lossy(&output.stderr).trim().to_string());
+                }
+            }
+            Err(error) => gateway_error = Some(format!("Could not run ip: {error}")),
+        }
+    }
+    let (dns_servers, dns_error) = match fs::read_to_string("/etc/resolv.conf") {
+        Ok(contents) => {
+            let servers = contents.lines().filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                (fields.next() == Some("nameserver")).then(|| fields.next().map(str::to_string)).flatten()
+            }).collect();
+            (servers, None)
+        }
+        Err(error) => (Vec::new(), Some(format!("Could not read resolver configuration: {error}"))),
+    };
+    NetworkRouteSnapshot { default_gateway, default_interface, dns_servers, gateway_error, dns_error }
 }
 
 #[tauri::command]
@@ -1840,6 +1887,7 @@ pub fn run() {
             save_text_file,
             get_temperatures,
             get_network_interfaces,
+            get_network_route_info,
             get_startup_apps,
             get_services,
             set_service_state,

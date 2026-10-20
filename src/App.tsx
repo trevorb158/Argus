@@ -41,6 +41,14 @@ type NetworkInterfaceSnapshot = NetworkCountersSnapshot & {
   uploadBytesPerSecond: number;
 };
 
+type NetworkRouteSnapshot = {
+  defaultGateway: string | null;
+  defaultInterface: string | null;
+  dnsServers: string[];
+  gatewayError: string | null;
+  dnsError: string | null;
+};
+
 type StartupAppSnapshot = {
   id: string;
   name: string;
@@ -281,6 +289,10 @@ function App() {
   const [networkInterfaces, setNetworkInterfaces] = useState<NetworkInterfaceSnapshot[]>([]);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [networkLoading, setNetworkLoading] = useState(false);
+  const [networkRouteInfo, setNetworkRouteInfo] = useState<NetworkRouteSnapshot | null>(null);
+  const [networkRouteLoading, setNetworkRouteLoading] = useState(false);
+  const [networkRouteError, setNetworkRouteError] = useState<string | null>(null);
+  const [networkRouteRefreshKey, setNetworkRouteRefreshKey] = useState(0);
   const [startupApps, setStartupApps] = useState<StartupAppSnapshot[]>([]);
   const [startupError, setStartupError] = useState<string | null>(null);
   const [startupLoading, setStartupLoading] = useState(false);
@@ -706,6 +718,26 @@ function App() {
       window.clearTimeout(timeoutId);
     };
   }, [page]);
+
+  useEffect(() => {
+    if (page !== "network") return;
+    let active = true;
+    setNetworkRouteLoading(true);
+    invoke<NetworkRouteSnapshot>("get_network_route_info")
+      .then((snapshot) => {
+        if (active) {
+          setNetworkRouteInfo(snapshot);
+          setNetworkRouteError(null);
+        }
+      })
+      .catch((error) => {
+        if (active) setNetworkRouteError(String(error));
+      })
+      .finally(() => {
+        if (active) setNetworkRouteLoading(false);
+      });
+    return () => { active = false; };
+  }, [page, networkRouteRefreshKey]);
 
   useEffect(() => {
     if (page !== "logs") return;
@@ -2209,6 +2241,30 @@ function App() {
                     <small>Combined non-loopback traffic</small>
                   </article>
                 </div>
+                <section className="network-route-card" aria-labelledby="network-route-title">
+                  <div className="network-route-heading">
+                    <div>
+                      <h3 id="network-route-title">Connection details</h3>
+                      <p>Local routing and resolver settings</p>
+                    </div>
+                    <button className="startup-refresh-button" disabled={networkRouteLoading} onClick={() => setNetworkRouteRefreshKey((key) => key + 1)}>
+                      {networkRouteLoading ? "Reading…" : "Refresh"}
+                    </button>
+                  </div>
+                  {networkRouteError ? (
+                    <div className="storage-message" role="alert">Could not read connection details: {networkRouteError}</div>
+                  ) : networkRouteLoading && !networkRouteInfo ? (
+                    <div className="storage-message" role="status">Reading local route and DNS settings…</div>
+                  ) : networkRouteInfo ? (
+                    <dl className="network-route-details">
+                      <div><dt>Local IP addresses</dt><dd>{networkInterfaces.filter((network) => !network.isLoopback).flatMap((network) => network.ipAddresses.map((address) => `${network.name}: ${address}`)).join(" · ") || "Not reported"}</dd></div>
+                      <div><dt>Default gateway</dt><dd>{networkRouteInfo.defaultGateway || "Not reported"}</dd></div>
+                      <div><dt>Route interface</dt><dd>{networkRouteInfo.defaultInterface || "Not reported"}</dd></div>
+                      <div><dt>Configured DNS servers</dt><dd>{networkRouteInfo.dnsServers.length ? networkRouteInfo.dnsServers.join(" · ") : networkRouteInfo.dnsError || "Not reported"}</dd></div>
+                    </dl>
+                  ) : null}
+                  <p className="network-route-note">DNS may show a local resolver address; that resolver can forward requests to upstream servers.</p>
+                </section>
                 <div className="network-interface-list">
                   {networkInterfaces.map((network) => (
                     <article className="network-interface-card" key={network.name}>

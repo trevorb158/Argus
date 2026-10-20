@@ -1613,6 +1613,65 @@ h1 {
   background: #111820;
 }
 
+.network-route-card {
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border: 1px solid #29343e;
+  border-radius: 8px;
+  background: #111820;
+}
+
+.network-route-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.network-route-heading h3 {
+  margin: 0 0 4px;
+  color: #d5dde6;
+  font-size: 11px;
+}
+
+.network-route-heading p,
+.network-route-note {
+  margin: 0;
+  color: #788593;
+  font-size: 9px;
+}
+
+.network-route-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 10px;
+}
+
+.network-route-details div {
+  min-width: 0;
+}
+
+.network-route-details dt {
+  margin-bottom: 5px;
+  color: #788593;
+  font-size: 9px;
+}
+
+.network-route-details dd {
+  margin: 0;
+  color: #c6d0da;
+  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 680px) {
+  .network-route-details {
+    grid-template-columns: 1fr;
+  }
+}
+
 .network-rate-card span {
   color: #7f8c99;
   font-size: 9px;

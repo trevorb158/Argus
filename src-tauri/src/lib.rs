@@ -190,6 +190,25 @@ struct LargeFileScanResult {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct CacheEntrySnapshot {
+    name: String,
+    size_bytes: u64,
+    file_count: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheInventorySnapshot {
+    entries: Vec<CacheEntrySnapshot>,
+    total_bytes: u64,
+    files_scanned: u64,
+    skipped_entries: usize,
+    scan_limited: bool,
+    available: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ProcessSnapshot {
     pid: u32,
     name: String,
@@ -676,6 +695,166 @@ fn get_temperatures() -> Vec<TemperatureSnapshot> {
 }
 
 #[tauri::command]
+async fn get_cache_inventory() -> Result<CacheInventorySnapshot, String> {
+    tauri::async_runtime::spawn_blocking(scan_cache_directory)
+        .await
+        .map_err(|error| format!("The cache scan could not finish: {error}"))?
+}
+
+fn scan_cache_directory() -> Result<CacheInventorySnapshot, String> {
+    const MAX_SCANNED_ENTRIES: usize = 100_000;
+    const MAX_DURATION: Duration = Duration::from_secs(20);
+
+    let root = env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+        .ok_or_else(|| "Could not find this account's cache folder".to_string())?;
+
+    if !root.is_dir() {
+        return Ok(CacheInventorySnapshot {
+            entries: Vec::new(),
+            total_bytes: 0,
+            files_scanned: 0,
+            skipped_entries: 0,
+            scan_limited: false,
+            available: false,
+        });
+    }
+
+    let started = Instant::now();
+    let mut pending = Vec::<(PathBuf, String)>::new();
+    let mut sizes = BTreeMap::<String, (u64, u64)>::new();
+    let mut scanned_entries = 0usize;
+    let mut skipped_entries = 0usize;
+    let mut files_scanned = 0u64;
+    let mut total_bytes = 0u64;
+    let mut scan_limited = false;
+
+    let top_level = fs::read_dir(&root)
+        .map_err(|error| format!("Could not read the cache folder: {error}"))?;
+    for entry in top_level {
+        if scanned_entries >= MAX_SCANNED_ENTRIES || started.elapsed() >= MAX_DURATION {
+            scan_limited = true;
+            break;
+        }
+        scanned_entries += 1;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                skipped_entries += 1;
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => {
+                skipped_entries += 1;
+                continue;
+            }
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let name = if file_type.is_dir() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            pending.push((entry.path(), name.clone()));
+            name
+        } else if file_type.is_file() {
+            "Other files".to_string()
+        } else {
+            continue;
+        };
+
+        if file_type.is_file() {
+            match entry.metadata() {
+                Ok(metadata) => {
+                    let item = sizes.entry(name).or_default();
+                    item.0 = item.0.saturating_add(metadata.len());
+                    item.1 = item.1.saturating_add(1);
+                    total_bytes = total_bytes.saturating_add(metadata.len());
+                    files_scanned += 1;
+                }
+                Err(_) => skipped_entries += 1,
+            }
+        }
+    }
+
+    while !scan_limited {
+        let Some((directory, category)) = pending.pop() else {
+            break;
+        };
+        let entries = match fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(_) => {
+                skipped_entries += 1;
+                continue;
+            }
+        };
+        for entry in entries {
+            if scanned_entries >= MAX_SCANNED_ENTRIES || started.elapsed() >= MAX_DURATION {
+                scan_limited = true;
+                break;
+            }
+            scanned_entries += 1;
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    skipped_entries += 1;
+                    continue;
+                }
+            };
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => {
+                    skipped_entries += 1;
+                    continue;
+                }
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                pending.push((entry.path(), category.clone()));
+            } else if file_type.is_file() {
+                match entry.metadata() {
+                    Ok(metadata) => {
+                        let item = sizes.entry(category.clone()).or_default();
+                        item.0 = item.0.saturating_add(metadata.len());
+                        item.1 = item.1.saturating_add(1);
+                        total_bytes = total_bytes.saturating_add(metadata.len());
+                        files_scanned += 1;
+                    }
+                    Err(_) => skipped_entries += 1,
+                }
+            }
+        }
+        if scan_limited {
+            break;
+        }
+    }
+
+    let mut entries = sizes
+        .into_iter()
+        .map(|(name, (size_bytes, file_count))| CacheEntrySnapshot {
+            name,
+            size_bytes,
+            file_count,
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| right.size_bytes.cmp(&left.size_bytes));
+
+    Ok(CacheInventorySnapshot {
+        entries,
+        total_bytes,
+        files_scanned,
+        skipped_entries,
+        scan_limited,
+        available: true,
+    })
+}
+
+#[tauri::command]
 async fn scan_large_files(root: String, minimum_size_bytes: u64) -> Result<LargeFileScanResult, String> {
     tauri::async_runtime::spawn_blocking(move || scan_large_files_inner(root, minimum_size_bytes))
         .await
@@ -924,6 +1103,7 @@ pub fn run() {
             get_partitions,
             get_processes,
             scan_large_files,
+            get_cache_inventory,
             terminate_process
         ])
         .run(tauri::generate_context!())

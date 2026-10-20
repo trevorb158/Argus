@@ -76,6 +76,15 @@ type LargeFileScanResult = {
   scanLimited: boolean;
   resultsLimited: boolean;
 };
+type CacheEntrySnapshot = { name: string; sizeBytes: number; fileCount: number };
+type CacheInventorySnapshot = {
+  entries: CacheEntrySnapshot[];
+  totalBytes: number;
+  filesScanned: number;
+  skippedEntries: number;
+  scanLimited: boolean;
+  available: boolean;
+};
 
 type DriveSnapshot = {
   name: string;
@@ -208,6 +217,9 @@ function App() {
   const [largeFileMinimum, setLargeFileMinimum] = useState(100 * 1024 * 1024);
   const [largeFileLoading, setLargeFileLoading] = useState(false);
   const [largeFileError, setLargeFileError] = useState<string | null>(null);
+  const [cacheInventory, setCacheInventory] = useState<CacheInventorySnapshot | null>(null);
+  const [cacheLoading, setCacheLoading] = useState(false);
+  const [cacheError, setCacheError] = useState<string | null>(null);
   const previousNetworkCounters = useRef<Record<string, {
     receivedBytes: number;
     transmittedBytes: number;
@@ -827,6 +839,20 @@ function App() {
     }
   }
 
+  async function inspectCacheSizes() {
+    setCacheLoading(true);
+    setCacheError(null);
+    try {
+      const inventory = await invoke<CacheInventorySnapshot>("get_cache_inventory");
+      setCacheInventory(inventory);
+    } catch (error) {
+      setCacheError(String(error));
+      setCacheInventory(null);
+    } finally {
+      setCacheLoading(false);
+    }
+  }
+
   async function chooseAndScanLargeFiles() {
     setLargeFileError(null);
     try {
@@ -986,7 +1012,7 @@ function App() {
                             ? "Review operating system, hardware, and desktop session details."
                             : page === "diagnostics"
                             ? "Create a local support summary and review it before saving."
-                            : "Find large files in a folder you choose, without changing anything."}
+                            : "Review large files and application cache usage without changing anything."}
             </p>
           </div>
           <div className="refresh-state">
@@ -1022,7 +1048,7 @@ function App() {
                                 ? diagnosticsStatus?.kind === "error"
                                   ? "status-dot muted"
                                   : "status-dot"
-                                : largeFileError
+                                : largeFileError || cacheError
                                   ? "status-dot muted"
                                   : "status-dot"
               }
@@ -1065,7 +1091,7 @@ function App() {
                                 : systemInfo?.operatingSystem ?? "System information unavailable"
                             : page === "diagnostics"
                               ? diagnosticsStatus?.message ?? (diagnosticsLoading ? "Collecting local details" : diagnosticsSnapshot ? "Report ready for review" : "No report collected")
-                              : largeFileError ? "Folder scan unavailable" : largeFileLoading ? "Scanning selected folder" : largeFileScan ? (largeFileScan.files.length + " large files found") : "No folder scanned"}
+                              : largeFileError || cacheError ? "Maintenance scan unavailable" : largeFileLoading || cacheLoading ? "Scanning local files" : largeFileScan ? (largeFileScan.files.length + " large files found") : cacheInventory ? (formatProcessMemory(cacheInventory.totalBytes) + " in caches") : "No folder scanned"}
           </div>
         </section>
 
@@ -1825,6 +1851,50 @@ function App() {
             ) : (
               <div className="storage-message" role="status">Choose a folder to start a read-only scan.</div>
             )}
+            <section className="cache-inspector" aria-labelledby="cache-inspector-title">
+              <div className="cache-inspector-heading">
+                <div>
+                  <h2 id="cache-inspector-title">Application cache usage</h2>
+                  <p>Inspect the size of folders in your local cache directory.</p>
+                </div>
+                <button className="startup-refresh-button" disabled={cacheLoading} onClick={() => void inspectCacheSizes()}>
+                  {cacheLoading ? "Inspecting…" : cacheInventory ? "Refresh cache sizes" : "Inspect cache sizes"}
+                </button>
+              </div>
+              <div className="maintenance-note">
+                This reads file names and sizes under your account’s cache folder only. It never opens file contents, follows symbolic links, or removes anything. It stops after 100,000 entries or 20 seconds and may show partial sizes.
+              </div>
+              {cacheError && <div className="storage-message" role="alert">Could not inspect caches: {cacheError}</div>}
+              {cacheLoading ? (
+                <div className="storage-message" role="status">Calculating cache folder sizes…</div>
+              ) : cacheInventory ? cacheInventory.available ? (
+                <>
+                  <div className="maintenance-summary">
+                    <span>Total cache size <strong>{formatProcessMemory(cacheInventory.totalBytes)}</strong></span>
+                    <span>{cacheInventory.filesScanned.toLocaleString()} files checked</span>
+                    {cacheInventory.skippedEntries > 0 && <span>{cacheInventory.skippedEntries.toLocaleString()} entries unavailable</span>}
+                  </div>
+                  {cacheInventory.scanLimited && <div className="service-warning" role="status">The cache scan reached its workload limit and shows partial sizes.</div>}
+                  {cacheInventory.entries.length === 0 ? (
+                    <div className="storage-message" role="status">No cache files were found.</div>
+                  ) : (
+                    <div className="cache-size-list">
+                      {cacheInventory.entries.map((entry) => (
+                        <article className="cache-size-entry" key={entry.name}>
+                          <strong>{entry.name}</strong>
+                          <span>{formatProcessMemory(entry.sizeBytes)}</span>
+                          <small>{entry.fileCount.toLocaleString()} files</small>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="storage-message" role="status">No local cache directory was found.</div>
+              ) : (
+                <div className="storage-message" role="status">Cache sizes have not been inspected.</div>
+              )}
+            </section>
             <p className="service-footnote">This finder only reports large files. It does not select files for deletion, clean caches, or change permissions.</p>
           </section>
         ) : (

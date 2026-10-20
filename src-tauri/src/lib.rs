@@ -209,6 +209,27 @@ struct CacheInventorySnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct LogFileSnapshot {
+    path: String,
+    size_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogInventorySnapshot {
+    files: Vec<LogFileSnapshot>,
+    log_bytes: u64,
+    scanned_entries: usize,
+    skipped_entries: usize,
+    scan_limited: bool,
+    log_directory_available: bool,
+    log_error: Option<String>,
+    journal_usage: Option<String>,
+    journal_error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ProcessSnapshot {
     pid: u32,
     name: String,
@@ -855,6 +876,133 @@ fn scan_cache_directory() -> Result<CacheInventorySnapshot, String> {
 }
 
 #[tauri::command]
+async fn get_log_inventory() -> Result<LogInventorySnapshot, String> {
+    tauri::async_runtime::spawn_blocking(scan_log_directory)
+        .await
+        .map_err(|error| format!("The log inspection could not finish: {error}"))?
+}
+
+fn scan_log_directory() -> Result<LogInventorySnapshot, String> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    const MAX_SCANNED_ENTRIES: usize = 50_000;
+    const MAX_RESULTS: usize = 100;
+    const MAX_DURATION: Duration = Duration::from_secs(10);
+
+    let root = PathBuf::from("/var/log");
+    let log_directory_available = root.is_dir();
+    let mut scanned_entries = 0usize;
+    let mut skipped_entries = 0usize;
+    let mut scan_limited = false;
+    let mut log_bytes = 0u64;
+    let mut largest = BinaryHeap::<Reverse<(u64, String)>>::new();
+    let mut log_error = None;
+
+    if log_directory_available {
+        let started = Instant::now();
+        let mut pending = vec![root];
+        while let Some(directory) = pending.pop() {
+            let entries = match fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(_) => {
+                    skipped_entries += 1;
+                    continue;
+                }
+            };
+            for entry in entries {
+                if scanned_entries >= MAX_SCANNED_ENTRIES || started.elapsed() >= MAX_DURATION {
+                    scan_limited = true;
+                    break;
+                }
+                scanned_entries += 1;
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(_) => {
+                        skipped_entries += 1;
+                        continue;
+                    }
+                };
+                let file_type = match entry.file_type() {
+                    Ok(file_type) => file_type,
+                    Err(_) => {
+                        skipped_entries += 1;
+                        continue;
+                    }
+                };
+                if file_type.is_symlink() {
+                    continue;
+                }
+                if file_type.is_dir() {
+                    pending.push(entry.path());
+                    continue;
+                }
+                if !file_type.is_file() {
+                    continue;
+                }
+                match entry.metadata() {
+                    Ok(metadata) => {
+                        let size = metadata.len();
+                        log_bytes = log_bytes.saturating_add(size);
+                        largest.push(Reverse((size, entry.path().to_string_lossy().into_owned())));
+                        if largest.len() > MAX_RESULTS {
+                            largest.pop();
+                        }
+                    }
+                    Err(_) => skipped_entries += 1,
+                }
+            }
+            if scan_limited {
+                break;
+            }
+        }
+    } else {
+        log_error = Some("/var/log is not available on this system".to_string());
+    }
+
+    let journal = Command::new("journalctl")
+        .args(["--disk-usage", "--no-pager"])
+        .output();
+    let (journal_usage, journal_error) = match journal {
+        Ok(output) if output.status.success() => {
+            let summary = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            (if summary.is_empty() { None } else { Some(summary) }, None)
+        }
+        Ok(output) => {
+            let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            (None, Some(if error.is_empty() {
+                format!("journalctl exited with status {}", output.status)
+            } else {
+                error
+            }))
+        }
+        Err(error) => (None, Some(format!("Could not run journalctl: {error}"))),
+    };
+
+    if !log_directory_available && journal_usage.is_none() {
+        log_error = log_error.or(Some("System log information is unavailable".to_string()));
+    }
+
+    let mut files = largest
+        .into_iter()
+        .map(|Reverse((size_bytes, path))| LogFileSnapshot { path, size_bytes })
+        .collect::<Vec<_>>();
+    files.sort_by(|left, right| right.size_bytes.cmp(&left.size_bytes));
+
+    Ok(LogInventorySnapshot {
+        files,
+        log_bytes,
+        scanned_entries,
+        skipped_entries,
+        scan_limited,
+        log_directory_available,
+        log_error,
+        journal_usage,
+        journal_error,
+    })
+}
+
+#[tauri::command]
 async fn scan_large_files(root: String, minimum_size_bytes: u64) -> Result<LargeFileScanResult, String> {
     tauri::async_runtime::spawn_blocking(move || scan_large_files_inner(root, minimum_size_bytes))
         .await
@@ -1104,6 +1252,7 @@ pub fn run() {
             get_processes,
             scan_large_files,
             get_cache_inventory,
+            get_log_inventory,
             terminate_process
         ])
         .run(tauri::generate_context!())

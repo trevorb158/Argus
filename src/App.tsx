@@ -85,6 +85,18 @@ type CacheInventorySnapshot = {
   scanLimited: boolean;
   available: boolean;
 };
+type LogFileSnapshot = { path: string; sizeBytes: number };
+type LogInventorySnapshot = {
+  files: LogFileSnapshot[];
+  logBytes: number;
+  scannedEntries: number;
+  skippedEntries: number;
+  scanLimited: boolean;
+  logDirectoryAvailable: boolean;
+  logError: string | null;
+  journalUsage: string | null;
+  journalError: string | null;
+};
 
 type DriveSnapshot = {
   name: string;
@@ -220,6 +232,9 @@ function App() {
   const [cacheInventory, setCacheInventory] = useState<CacheInventorySnapshot | null>(null);
   const [cacheLoading, setCacheLoading] = useState(false);
   const [cacheError, setCacheError] = useState<string | null>(null);
+  const [logInventory, setLogInventory] = useState<LogInventorySnapshot | null>(null);
+  const [logLoading, setLogLoading] = useState(false);
+  const [logError, setLogError] = useState<string | null>(null);
   const previousNetworkCounters = useRef<Record<string, {
     receivedBytes: number;
     transmittedBytes: number;
@@ -839,6 +854,19 @@ function App() {
     }
   }
 
+  async function inspectLogSizes() {
+    setLogLoading(true);
+    setLogError(null);
+    try {
+      setLogInventory(await invoke<LogInventorySnapshot>("get_log_inventory"));
+    } catch (error) {
+      setLogInventory(null);
+      setLogError(String(error));
+    } finally {
+      setLogLoading(false);
+    }
+  }
+
   async function inspectCacheSizes() {
     setCacheLoading(true);
     setCacheError(null);
@@ -1048,7 +1076,7 @@ function App() {
                                 ? diagnosticsStatus?.kind === "error"
                                   ? "status-dot muted"
                                   : "status-dot"
-                                : largeFileError || cacheError
+                                : largeFileError || cacheError || logError
                                   ? "status-dot muted"
                                   : "status-dot"
               }
@@ -1091,7 +1119,7 @@ function App() {
                                 : systemInfo?.operatingSystem ?? "System information unavailable"
                             : page === "diagnostics"
                               ? diagnosticsStatus?.message ?? (diagnosticsLoading ? "Collecting local details" : diagnosticsSnapshot ? "Report ready for review" : "No report collected")
-                              : largeFileError || cacheError ? "Maintenance scan unavailable" : largeFileLoading || cacheLoading ? "Scanning local files" : largeFileScan ? (largeFileScan.files.length + " large files found") : cacheInventory ? (formatProcessMemory(cacheInventory.totalBytes) + " in caches") : "No folder scanned"}
+                              : largeFileError || cacheError || logError ? "Maintenance scan unavailable" : largeFileLoading || cacheLoading || logLoading ? "Scanning local files" : largeFileScan ? (largeFileScan.files.length + " large files found") : cacheInventory ? (formatProcessMemory(cacheInventory.totalBytes) + " in caches") : logInventory ? "Log sizes inspected" : "No folder scanned"}
           </div>
         </section>
 
@@ -1893,6 +1921,65 @@ function App() {
                 <div className="storage-message" role="status">No local cache directory was found.</div>
               ) : (
                 <div className="storage-message" role="status">Cache sizes have not been inspected.</div>
+              )}
+            </section>
+            <section className="cache-inspector log-inspector" aria-labelledby="log-inspector-title">
+              <div className="cache-inspector-heading">
+                <div>
+                  <h2 id="log-inspector-title">System log usage</h2>
+                  <p>Review log file sizes and the journal’s reported disk usage.</p>
+                </div>
+                <button className="startup-refresh-button" disabled={logLoading} onClick={() => void inspectLogSizes()}>
+                  {logLoading ? "Inspecting…" : logInventory ? "Refresh log sizes" : "Inspect log sizes"}
+                </button>
+              </div>
+              <div className="maintenance-note">
+                Kestrel reads file metadata and asks journalctl for its disk-usage summary. It does not read log contents, clear logs, or change permissions.
+              </div>
+              {logError && <div className="storage-message" role="alert">Could not inspect logs: {logError}</div>}
+              {logLoading ? (
+                <div className="storage-message" role="status">Checking local log sizes…</div>
+              ) : logInventory ? (
+                <>
+                  {logInventory.logError && <div className="service-warning" role="status">{logInventory.logError}</div>}
+                  {logInventory.journalUsage ? (
+                    <div className="journal-usage-summary">
+                      <span>Journal disk usage</span>
+                      <strong>{logInventory.journalUsage}</strong>
+                      <small>Journal data may also be included in the /var/log total.</small>
+                    </div>
+                  ) : logInventory.journalError ? (
+                    <div className="service-warning" role="status">Journal usage unavailable: {logInventory.journalError}</div>
+                  ) : null}
+                  {logInventory.logDirectoryAvailable && (
+                    <>
+                      <div className="maintenance-summary">
+                        <span>Total size of files under /var/log <strong>{formatProcessMemory(logInventory.logBytes)}</strong></span>
+                        <span>{logInventory.scannedEntries.toLocaleString()} entries checked</span>
+                        {logInventory.skippedEntries > 0 && <span>{logInventory.skippedEntries.toLocaleString()} entries unavailable</span>}
+                      </div>
+                      {logInventory.scanLimited && <div className="service-warning" role="status">The log scan reached its workload limit and shows partial file sizes.</div>}
+                      {logInventory.files.length > 0 && (
+                        <>
+                          <h3 className="log-file-list-title">Largest files under /var/log</h3>
+                          <div className="large-file-list">
+                          {logInventory.files.map((file) => (
+                            <article className="large-file-entry" key={file.path}>
+                              <div className="large-file-name">
+                                <strong>{file.path.split("/").pop() || file.path}</strong>
+                                <small>{file.path}</small>
+                              </div>
+                              <span>{formatProcessMemory(file.sizeBytes)}</span>
+                            </article>
+                          ))}
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+                </>
+              ) : (
+                <div className="storage-message" role="status">Log sizes have not been inspected.</div>
               )}
             </section>
             <p className="service-footnote">This finder only reports large files. It does not select files for deletion, clean caches, or change permissions.</p>

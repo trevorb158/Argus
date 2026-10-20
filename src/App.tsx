@@ -71,7 +71,13 @@ type ServiceSnapshot = {
 
 type ServiceInventory = { services: ServiceSnapshot[]; warnings: string[] };
 type ServiceFilter = "all" | "active" | "failed" | "enabled";
-type BatterySnapshot = { name: string; capacityPercent: number | null; status: string | null };
+type BatterySnapshot = {
+  name: string;
+  capacityPercent: number | null;
+  status: string | null;
+  healthPercent: number | null;
+  cycleCount: number | null;
+};
 type SystemInfoSnapshot = {
   operatingSystem: string;
   kernelVersion: string | null;
@@ -2603,6 +2609,12 @@ function App() {
                       </div>
                     )}
                     <small>{battery.status ?? "Charge state unavailable"}</small>
+                    <div className="battery-health-details">
+                      <span>Full capacity health</span>
+                      <strong>{battery.healthPercent === null ? "Unavailable" : `${battery.healthPercent}% of design`}</strong>
+                      <span>Charge cycles</span>
+                      <strong>{battery.cycleCount === null ? "Unavailable" : battery.cycleCount.toLocaleString()}</strong>
+                    </div>
                   </article>
                 ))}
               </div>

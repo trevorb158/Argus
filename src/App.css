@@ -2945,6 +2945,28 @@ h1 {
   background: #67d5b2;
 }
 
+.battery-health-details {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid #252f39;
+}
+
+.battery-health-details span {
+  color: #788593;
+  font-size: 9px;
+}
+
+.battery-health-details strong {
+  color: #c5d0da;
+  font-size: 9px;
+  font-weight: 500;
+  text-align: right;
+}
+
 
 .performance-page {
   padding: 20px;

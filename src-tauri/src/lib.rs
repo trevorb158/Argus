@@ -45,6 +45,8 @@ struct BatterySnapshot {
     name: String,
     capacity_percent: Option<u8>,
     status: Option<String>,
+    health_percent: Option<u8>,
+    cycle_count: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -410,13 +412,29 @@ fn read_battery_status() -> Vec<BatterySnapshot> {
                 .ok()
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty());
+            let full_capacity = read_power_supply_value(&path, &["energy_full", "charge_full"]);
+            let design_capacity = read_power_supply_value(&path, &["energy_full_design", "charge_full_design"]);
+            let health_percent = full_capacity.zip(design_capacity).and_then(|(full, design)| {
+                (design > 0).then(|| ((full as f64 / design as f64 * 100.0).round() as u64).min(150) as u8)
+            });
+            let cycle_count = fs::read_to_string(path.join("cycle_count"))
+                .ok()
+                .and_then(|value| value.trim().parse::<u32>().ok());
             Some(BatterySnapshot {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 capacity_percent,
                 status,
+                health_percent,
+                cycle_count,
             })
         })
         .collect()
+}
+
+fn read_power_supply_value(path: &Path, candidates: &[&str]) -> Option<u64> {
+    candidates.iter().find_map(|name| {
+        fs::read_to_string(path.join(name)).ok()?.trim().parse::<u64>().ok()
+    })
 }
 
 #[tauri::command]

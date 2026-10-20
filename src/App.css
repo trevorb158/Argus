@@ -2372,9 +2372,9 @@ h1 {
 
 .cache-size-entry {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 90px 75px;
+  grid-template-columns: minmax(0, 1fr) 90px 75px 70px;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   padding: 10px 13px;
   border-bottom: 1px solid #202832;
   color: #d5dde6;
@@ -2397,6 +2397,27 @@ h1 {
   font-size: 9px;
 }
 
+.cache-clear-button {
+  padding: 5px 8px;
+  border: 1px solid #51373a;
+  border-radius: 5px;
+  background: #24191b;
+  color: #e6a2a2;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.cache-clear-button:hover:not(:disabled) {
+  border-color: #8a4d4d;
+  background: #321f21;
+  color: #ffc0b8;
+}
+
+.cache-clear-button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 @media (max-width: 700px) {
   .cache-inspector-heading {
     align-items: stretch;
@@ -2408,8 +2429,13 @@ h1 {
   }
 
   .cache-size-entry small {
-    grid-column: 1 / -1;
+    grid-column: 1;
     text-align: left;
+  }
+
+  .cache-clear-button {
+    grid-column: 2;
+    grid-row: 2;
   }
 }
 

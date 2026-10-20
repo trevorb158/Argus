@@ -91,7 +91,7 @@ type LargeFileScanResult = {
   scanLimited: boolean;
   resultsLimited: boolean;
 };
-type CacheEntrySnapshot = { name: string; sizeBytes: number; fileCount: number };
+type CacheEntrySnapshot = { name: string; sizeBytes: number; fileCount: number; clearable: boolean };
 type CacheInventorySnapshot = {
   entries: CacheEntrySnapshot[];
   totalBytes: number;
@@ -287,6 +287,8 @@ function App() {
   const [cacheInventory, setCacheInventory] = useState<CacheInventorySnapshot | null>(null);
   const [cacheLoading, setCacheLoading] = useState(false);
   const [cacheError, setCacheError] = useState<string | null>(null);
+  const [cacheActionName, setCacheActionName] = useState<string | null>(null);
+  const [cacheActionStatus, setCacheActionStatus] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [logInventory, setLogInventory] = useState<LogInventorySnapshot | null>(null);
   const [logLoading, setLogLoading] = useState(false);
   const [logError, setLogError] = useState<string | null>(null);
@@ -1096,6 +1098,26 @@ function App() {
       setLogError(String(error));
     } finally {
       setLogLoading(false);
+    }
+  }
+
+  async function clearCacheEntry(entry: CacheEntrySnapshot) {
+    if (!entry.clearable || cacheActionName) return;
+    const confirmed = window.confirm(
+      `Clear the “${entry.name}” cache folder? This permanently removes its contents (${formatProcessMemory(entry.sizeBytes)} as measured). Close the related app first; it may need to rebuild its cache.`,
+    );
+    if (!confirmed) return;
+
+    setCacheActionName(entry.name);
+    setCacheActionStatus(null);
+    try {
+      await invoke("clear_cache_entry", { directoryName: entry.name });
+      setCacheActionStatus({ kind: "success", message: `Cleared the ${entry.name} cache folder.` });
+      await inspectCacheSizes();
+    } catch (error) {
+      setCacheActionStatus({ kind: "error", message: `Could not clear ${entry.name}: ${String(error)}` });
+    } finally {
+      setCacheActionName(null);
     }
   }
 
@@ -2264,8 +2286,13 @@ function App() {
                 </button>
               </div>
               <div className="maintenance-note">
-                This reads file names and sizes under your account’s cache folder only. It never opens file contents, follows symbolic links, or removes anything. It stops after 100,000 entries or 20 seconds and may show partial sizes.
+                Kestrel inspects only your account’s cache folder. Clear actions are limited to folders within ~/.cache. Choose a specific application folder; close that app first because it may need to rebuild its cache. The inspection stops after 100,000 entries or 20 seconds and may show partial sizes.
               </div>
+              {cacheActionStatus && (
+                <div className={cacheActionStatus.kind === "error" ? "process-action-message error" : "process-action-message"} role={cacheActionStatus.kind === "error" ? "alert" : "status"}>
+                  {cacheActionStatus.message}
+                </div>
+              )}
               {cacheError && <div className="storage-message" role="alert">Could not inspect caches: {cacheError}</div>}
               {cacheLoading ? (
                 <div className="storage-message" role="status">Calculating cache folder sizes…</div>
@@ -2286,6 +2313,15 @@ function App() {
                           <strong>{entry.name}</strong>
                           <span>{formatProcessMemory(entry.sizeBytes)}</span>
                           <small>{entry.fileCount.toLocaleString()} files</small>
+                          {entry.clearable && (
+                            <button
+                              className="cache-clear-button"
+                              disabled={cacheActionName !== null || cacheLoading}
+                              onClick={() => void clearCacheEntry(entry)}
+                            >
+                              {cacheActionName === entry.name ? "Clearing…" : "Clear"}
+                            </button>
+                          )}
                         </article>
                       ))}
                     </div>

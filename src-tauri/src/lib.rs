@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -234,6 +234,7 @@ struct CacheEntrySnapshot {
     name: String,
     size_bytes: u64,
     file_count: u64,
+    clearable: bool,
 }
 
 #[derive(Serialize)]
@@ -846,6 +847,53 @@ fn get_temperatures() -> Vec<TemperatureSnapshot> {
         .collect()
 }
 
+fn cache_root_is_safe_to_clear(root: &Path) -> bool {
+    let Some(home) = env::var_os("HOME").map(PathBuf::from) else { return false };
+    let (Ok(home), Ok(root)) = (home.canonicalize(), root.canonicalize()) else { return false };
+    root != home && root.starts_with(&home) && root.file_name().is_some_and(|name| name == ".cache")
+}
+
+fn user_cache_root() -> Result<PathBuf, String> {
+    env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+        .ok_or_else(|| "Could not find this account's cache folder".to_string())
+}
+
+#[tauri::command]
+fn clear_cache_entry(directory_name: String) -> Result<(), String> {
+    let relative_path = Path::new(&directory_name);
+    let mut components = relative_path.components();
+    let is_one_directory_name = matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
+    if !is_one_directory_name || directory_name == "Other files" {
+        return Err("Choose one top-level cache directory".to_string());
+    }
+
+    let configured_root = user_cache_root()?;
+    if !cache_root_is_safe_to_clear(&configured_root) {
+        return Err("Cleanup is available only for a .cache directory inside your home folder".to_string());
+    }
+    let root = configured_root
+        .canonicalize()
+        .map_err(|error| format!("Could not access this account's cache folder: {error}"))?;
+    let target = root.join(&directory_name);
+    let metadata = fs::symlink_metadata(&target)
+        .map_err(|error| format!("Could not inspect the selected cache directory: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("The selected cache entry is not a regular directory".to_string());
+    }
+    let canonical_target = target
+        .canonicalize()
+        .map_err(|error| format!("Could not verify the selected cache directory: {error}"))?;
+    if canonical_target.parent() != Some(root.as_path()) {
+        return Err("The selected directory is outside this account's cache folder".to_string());
+    }
+
+    fs::remove_dir_all(&canonical_target)
+        .map_err(|error| format!("Could not clear the selected cache directory: {error}"))
+}
+
 #[tauri::command]
 async fn get_cache_inventory() -> Result<CacheInventorySnapshot, String> {
     tauri::async_runtime::spawn_blocking(scan_cache_directory)
@@ -857,11 +905,7 @@ fn scan_cache_directory() -> Result<CacheInventorySnapshot, String> {
     const MAX_SCANNED_ENTRIES: usize = 100_000;
     const MAX_DURATION: Duration = Duration::from_secs(20);
 
-    let root = env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
-        .ok_or_else(|| "Could not find this account's cache folder".to_string())?;
+    let root = user_cache_root()?;
 
     if !root.is_dir() {
         return Ok(CacheInventorySnapshot {
@@ -877,6 +921,8 @@ fn scan_cache_directory() -> Result<CacheInventorySnapshot, String> {
     let started = Instant::now();
     let mut pending = Vec::<(PathBuf, String)>::new();
     let mut sizes = BTreeMap::<String, (u64, u64)>::new();
+    let mut cache_directories = std::collections::BTreeSet::<String>::new();
+    let cache_root_clearable = cache_root_is_safe_to_clear(&root);
     let mut scanned_entries = 0usize;
     let mut skipped_entries = 0usize;
     let mut files_scanned = 0u64;
@@ -910,6 +956,7 @@ fn scan_cache_directory() -> Result<CacheInventorySnapshot, String> {
         }
         let name = if file_type.is_dir() {
             let name = entry.file_name().to_string_lossy().into_owned();
+            cache_directories.insert(name.clone());
             pending.push((entry.path(), name.clone()));
             name
         } else if file_type.is_file() {
@@ -988,10 +1035,14 @@ fn scan_cache_directory() -> Result<CacheInventorySnapshot, String> {
 
     let mut entries = sizes
         .into_iter()
-        .map(|(name, (size_bytes, file_count))| CacheEntrySnapshot {
-            name,
-            size_bytes,
-            file_count,
+        .map(|(name, (size_bytes, file_count))| {
+            let clearable = cache_root_clearable && cache_directories.contains(&name) && name != "Other files";
+            CacheEntrySnapshot {
+                name,
+                size_bytes,
+                file_count,
+                clearable,
+            }
         })
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| right.size_bytes.cmp(&left.size_bytes));
@@ -1433,6 +1484,7 @@ pub fn run() {
             get_processes,
             scan_large_files,
             get_cache_inventory,
+            clear_cache_entry,
             get_log_inventory,
             get_recent_logs,
             terminate_process

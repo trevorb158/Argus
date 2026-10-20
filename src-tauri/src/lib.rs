@@ -610,6 +610,41 @@ fn query_service_scope(user_scope: bool, scope: &str) -> Result<Vec<ServiceSnaps
 }
 
 #[tauri::command]
+async fn set_user_service_state(unit: String, action: String) -> Result<(), String> {
+    if !unit.ends_with(".service")
+        || unit.starts_with('-')
+        || !unit.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"@._:-".contains(&byte))
+    {
+        return Err("Select a valid user service from the current list".to_string());
+    }
+    if !matches!(action.as_str(), "start" | "stop" | "enable" | "disable") {
+        return Err("This service action is not supported".to_string());
+    }
+    if !query_service_scope(true, "User")?.iter().any(|service| service.unit == unit) {
+        return Err("That user service is no longer in the current service list".to_string());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = Command::new("systemctl")
+            .args(["--user", action.as_str(), unit.as_str()])
+            .output()
+            .map_err(|error| format!("Could not start the user service manager: {error}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Err(if message.is_empty() {
+                format!("The user service manager could not {action} {unit}")
+            } else {
+                message
+            })
+        }
+    })
+    .await
+    .map_err(|error| format!("The service operation could not finish: {error}"))?
+}
+
+#[tauri::command]
 fn get_services() -> Result<ServiceInventory, String> {
     let (system, user) = std::thread::scope(|scope| {
         let system = scope.spawn(|| query_service_scope(false, "System"));
@@ -1552,6 +1587,7 @@ pub fn run() {
             get_network_interfaces,
             get_startup_apps,
             get_services,
+            set_user_service_state,
             set_startup_enabled,
             get_storage,
             get_partitions,

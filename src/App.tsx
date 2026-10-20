@@ -280,6 +280,8 @@ function App() {
   const [serviceFilter, setServiceFilter] = useState<ServiceFilter>("all");
   const [serviceVisibleCount, setServiceVisibleCount] = useState(60);
   const [serviceRefreshKey, setServiceRefreshKey] = useState(0);
+  const [serviceActionUnit, setServiceActionUnit] = useState<string | null>(null);
+  const [serviceActionStatus, setServiceActionStatus] = useState<StartupActionStatus | null>(null);
   const [systemInfo, setSystemInfo] = useState<SystemInfoSnapshot | null>(null);
   const [systemInfoError, setSystemInfoError] = useState<string | null>(null);
   const [systemInfoLoading, setSystemInfoLoading] = useState(false);
@@ -1069,6 +1071,31 @@ function App() {
       setProcessActionStatus({ kind: "error", message: `Could not force stop ${name} (PID ${process.pid}): ${String(error)}` });
     } finally {
       setTerminatingPid(null);
+    }
+  }
+
+  async function requestUserServiceAction(service: ServiceSnapshot, action: "start" | "stop" | "enable" | "disable") {
+    if (service.scope !== "User" || serviceActionUnit !== null) return;
+    const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
+    const detail = action === "stop"
+      ? "This may interrupt apps or background work that depend on it."
+      : action === "disable"
+        ? "This prevents it from starting automatically in your user session. It will not stop a running instance."
+        : action === "enable"
+          ? "This allows it to start automatically in your user session."
+          : "This starts it in your user session now.";
+    if (!window.confirm(`${actionLabel} user service ${service.unit}?\n\n${detail}`)) return;
+
+    setServiceActionUnit(service.unit);
+    setServiceActionStatus(null);
+    try {
+      await invoke("set_user_service_state", { unit: service.unit, action });
+      setServiceActionStatus({ kind: "success", message: `${service.unit}: ${actionLabel.toLowerCase()} request completed.` });
+      setServiceRefreshKey((key) => key + 1);
+    } catch (error) {
+      setServiceActionStatus({ kind: "error", message: `Could not ${action} ${service.unit}: ${String(error)}` });
+    } finally {
+      setServiceActionUnit(null);
     }
   }
 
@@ -2188,7 +2215,7 @@ function App() {
             <div className="services-toolbar">
               <div>
                 <h2 id="services-page-title">System and user services</h2>
-                <p>{serviceLoading && services.length === 0 ? "Reading service managers…" : `${filteredServices.length} of ${services.length} services · read-only view`}</p>
+                <p>{serviceLoading && services.length === 0 ? "Reading service managers…" : `${filteredServices.length} of ${services.length} services · user services have controls`}</p>
               </div>
               <div className="services-toolbar-actions">
                 <label className="services-search">
@@ -2228,6 +2255,11 @@ function App() {
               </div>
             </div>
 
+            {serviceActionStatus && (
+              <div className={`service-action-message ${serviceActionStatus.kind}`} role={serviceActionStatus.kind === "error" ? "alert" : "status"}>
+                {serviceActionStatus.message}
+              </div>
+            )}
             {serviceWarnings.length > 0 && (
               <div className="service-warning" role="status">
                 {serviceWarnings.join(" ")}
@@ -2255,6 +2287,28 @@ function App() {
                     </span>
                     <span className="service-startup-state">{service.startupState}</span>
                     <span className={`service-scope${service.scope === "User" ? " user" : ""}`}>{service.scope}</span>
+                    {service.scope === "User" ? (
+                      <div className="service-row-actions">
+                        {service.activeState === "active" ? (
+                          <button className="service-action-button stop" type="button" disabled={serviceActionUnit !== null} onClick={() => void requestUserServiceAction(service, "stop")}>
+                            {serviceActionUnit === service.unit ? "Working…" : "Stop"}
+                          </button>
+                        ) : ["inactive", "failed"].includes(service.activeState) ? (
+                          <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} onClick={() => void requestUserServiceAction(service, "start")}>
+                            {serviceActionUnit === service.unit ? "Working…" : "Start"}
+                          </button>
+                        ) : null}
+                        {service.startupState === "enabled" ? (
+                          <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} onClick={() => void requestUserServiceAction(service, "disable")}>
+                            Disable
+                          </button>
+                        ) : service.startupState === "disabled" ? (
+                          <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} onClick={() => void requestUserServiceAction(service, "enable")}>
+                            Enable
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : <span className="service-row-actions read-only">Read only</span>}
                   </article>
                 ))}
               </div>
@@ -2268,7 +2322,7 @@ function App() {
               </button>
             )}
             <p className="service-footnote">
-              Service status and startup modes come from the systemd system and user managers. This page is read-only; Kestrel will use a separate, permission-aware flow before offering service controls.
+              Service status comes from the systemd system and user managers. Kestrel can start or stop user services and change their user-session startup setting after confirmation. System-wide services remain read-only.
             </p>
           </section>
         ) : page === "system" ? (

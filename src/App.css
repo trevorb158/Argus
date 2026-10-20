@@ -1033,7 +1033,7 @@ h1 {
 
 .service-entry {
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) 130px 130px 70px;
+  grid-template-columns: minmax(170px, 1fr) 130px 130px 70px auto;
   align-items: center;
   gap: 13px;
   padding: 11px 14px;
@@ -1115,6 +1115,55 @@ h1 {
   border-color: #343b4b;
   background: #1b202a;
   color: #a7b7e3;
+}
+
+.service-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.service-row-actions.read-only {
+  color: #75818f;
+  font-size: 9px;
+}
+
+.service-action-button {
+  padding: 6px 8px;
+  border: 1px solid #33443f;
+  border-radius: 6px;
+  background: #17231f;
+  color: #9be3cc;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.service-action-button.stop {
+  border-color: #51373a;
+  background: #24191b;
+  color: #e6a2a2;
+}
+
+.service-action-button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.service-action-message {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #30473d;
+  border-radius: 7px;
+  background: #15231e;
+  color: #a9e4c9;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.service-action-message.error {
+  border-color: #52363a;
+  background: #251a1c;
+  color: #edb2ae;
 }
 
 .service-footnote {
@@ -1996,6 +2045,11 @@ h1 {
   .service-entry {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px 12px;
+  }
+
+  .service-row-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 
   .service-entry-main {

@@ -2494,6 +2494,11 @@ h1 {
   background: #e58c76;
 }
 
+.performance-io-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
 .performance-cores {
   margin-top: 22px;
 }
@@ -2539,7 +2544,8 @@ h1 {
 }
 
 @media (max-width: 800px) {
-  .performance-summary-grid {
+  .performance-summary-grid,
+  .performance-io-grid {
     grid-template-columns: 1fr;
   }
 }

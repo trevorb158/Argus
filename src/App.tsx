@@ -17,6 +17,8 @@ type PerformanceSnapshot = {
   memoryTotalBytes: number;
   swapUsedBytes: number;
   swapTotalBytes: number;
+  diskReadBytesPerSecond: number;
+  diskWriteBytesPerSecond: number;
 };
 
 type TemperatureSnapshot = {
@@ -2186,6 +2188,18 @@ function App() {
                       <div className="performance-meter"><span className="swap" style={{ width: Math.max(0, Math.min(100, (performanceSnapshot.swapUsedBytes / performanceSnapshot.swapTotalBytes) * 100)) + "%" }} /></div>
                     )}
                     <small>{performanceSnapshot.swapTotalBytes > 0 ? "Virtual memory in use" : "No swap space is available"}</small>
+                  </article>
+                </div>
+                <div className="performance-summary-grid performance-io-grid">
+                  <article className="performance-summary-card">
+                    <span className="system-info-label">DISK READ</span>
+                    <strong>{formatBytes(performanceSnapshot.diskReadBytesPerSecond)}<small>/s</small></strong>
+                    <small>Current read activity across mounted drives</small>
+                  </article>
+                  <article className="performance-summary-card">
+                    <span className="system-info-label">DISK WRITE</span>
+                    <strong>{formatBytes(performanceSnapshot.diskWriteBytesPerSecond)}<small>/s</small></strong>
+                    <small>Current write activity across mounted drives</small>
                   </article>
                 </div>
                 <div className="performance-cores">

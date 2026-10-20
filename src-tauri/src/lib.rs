@@ -27,6 +27,8 @@ struct PerformanceSnapshot {
     memory_total_bytes: u64,
     swap_used_bytes: u64,
     swap_total_bytes: u64,
+    disk_read_bytes_per_second: u64,
+    disk_write_bytes_per_second: u64,
 }
 
 #[derive(Serialize)]
@@ -271,6 +273,13 @@ struct ProcessSnapshot {
 
 struct TelemetryState(Mutex<System>);
 
+struct DiskActivityState {
+    disks: Disks,
+    last_sample: Instant,
+}
+
+struct DiskActivity(Mutex<DiskActivityState>);
+
 #[tauri::command]
 fn get_telemetry(
     state: tauri::State<'_, TelemetryState>,
@@ -293,6 +302,7 @@ fn get_telemetry(
 #[tauri::command]
 fn get_performance_snapshot(
     state: tauri::State<'_, TelemetryState>,
+    disk_activity: tauri::State<'_, DiskActivity>,
 ) -> Result<PerformanceSnapshot, String> {
     let mut system = state
         .0
@@ -310,6 +320,24 @@ fn get_performance_snapshot(
         })
         .collect();
 
+    let mut disk_state = disk_activity
+        .0
+        .lock()
+        .map_err(|_| "Disk activity information is unavailable".to_string())?;
+    disk_state.disks.refresh(false);
+    let elapsed_seconds = disk_state.last_sample.elapsed().as_secs_f64().max(0.001);
+    let mut read_bytes = 0u64;
+    let mut written_bytes = 0u64;
+    let mut seen_devices = std::collections::BTreeSet::new();
+    for disk in disk_state.disks.list() {
+        if seen_devices.insert(disk.name().to_os_string()) {
+            let usage = disk.usage();
+            read_bytes = read_bytes.saturating_add(usage.read_bytes);
+            written_bytes = written_bytes.saturating_add(usage.written_bytes);
+        }
+    }
+    disk_state.last_sample = Instant::now();
+
     Ok(PerformanceSnapshot {
         cpu_usage_percent: system.global_cpu_usage(),
         cores,
@@ -318,6 +346,8 @@ fn get_performance_snapshot(
         memory_total_bytes: system.total_memory(),
         swap_used_bytes: system.used_swap(),
         swap_total_bytes: system.total_swap(),
+        disk_read_bytes_per_second: (read_bytes as f64 / elapsed_seconds) as u64,
+        disk_write_bytes_per_second: (written_bytes as f64 / elapsed_seconds) as u64,
     })
 }
 
@@ -1327,6 +1357,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(TelemetryState(Mutex::new(system)))
+        .manage(DiskActivity(Mutex::new(DiskActivityState {
+            disks: Disks::new_with_refreshed_list(),
+            last_sample: Instant::now(),
+        })))
         .invoke_handler(tauri::generate_handler![
             get_telemetry,
             get_system_info,

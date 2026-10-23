@@ -1045,7 +1045,7 @@ function App() {
   }, [page, startupRefreshKey]);
 
   useEffect(() => {
-    if (page !== "network") return;
+    if (page !== "network" && page !== "overview") return;
     let active = true;
     let timeoutId = 0;
     previousNetworkCounters.current = {};
@@ -1177,7 +1177,7 @@ function App() {
   }, [page, systemLogsRefreshKey]);
 
   useEffect(() => {
-    if (page !== "processes") return;
+    if (page !== "processes" && page !== "overview") return;
     let active = true;
     let timeoutId = 0;
     previousProcessIoCounters.current = {};

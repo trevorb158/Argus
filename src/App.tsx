@@ -376,7 +376,6 @@ const MAX_OPERATION_HISTORY = 250;
 function readOperationHistory(): OperationRecord[] {
   try {
     const raw = localStorage.getItem(OPERATION_HISTORY_KEY);
-    console.log("Reading history from storage:", raw);
     if (!raw) return [];
     const value: unknown = JSON.parse(raw);
     if (!Array.isArray(value)) return [];
@@ -396,8 +395,7 @@ function readOperationHistory(): OperationRecord[] {
           typeof entry.note === "string",
       )
       .slice(0, MAX_OPERATION_HISTORY);
-  } catch (e) {
-    console.error("Error reading history:", e);
+  } catch {
     return [];
   }
 }
@@ -413,9 +411,8 @@ function appendOperationHistory(details: OperationDetails): OperationRecord[] {
   );
   try {
     localStorage.setItem(OPERATION_HISTORY_KEY, JSON.stringify(next));
-    console.log("Saved history successfully. Total entries:", next.length);
-  } catch (e) {
-    console.error("LocalStorage set failed:", e);
+  } catch {
+    // ignore quota / private-mode errors
   }
   return next;
 }
@@ -698,11 +695,6 @@ function App() {
       localStorage.setItem("argus.history-window", String(historyWindow));
     } catch {}
   }, [temperatureUnit, historyWindow]);
-
-  // DEBUG LOG: Track operation history changes
-  useEffect(() => {
-    console.log("Operation History state changed:", operationHistory);
-  }, [operationHistory]);
 
   // Global Keyboard Listener for Command Palette
   useEffect(() => {
@@ -1645,10 +1637,24 @@ function App() {
               kind: "success",
               message: `Administrator-authorized termination signal sent.`,
             });
+            recordOperation({
+              category: "Process",
+              action: "End process (admin)",
+              target: `${process.name} (PID ${process.pid})`,
+              outcome: "success",
+              note: "Administrator-authorized termination signal was sent.",
+            });
           } catch (e) {
             setProcessActionStatus({
               kind: "error",
               message: `Authorization failed: ${String(e)}`,
+            });
+            recordOperation({
+              category: "Process",
+              action: "End process (admin)",
+              target: `${process.name} (PID ${process.pid})`,
+              outcome: "failed",
+              note: "Administrator-authorized termination failed.",
             });
           }
         }
@@ -1708,10 +1714,24 @@ function App() {
               kind: "success",
               message: `Administrator-authorized kill signal sent.`,
             });
+            recordOperation({
+              category: "Process",
+              action: "Force stop process (admin)",
+              target: `${process.name} (PID ${process.pid})`,
+              outcome: "success",
+              note: "Administrator-authorized kill signal was sent.",
+            });
           } catch (e) {
             setProcessActionStatus({
               kind: "error",
               message: `Authorization failed: ${String(e)}`,
+            });
+            recordOperation({
+              category: "Process",
+              action: "Force stop process (admin)",
+              target: `${process.name} (PID ${process.pid})`,
+              outcome: "failed",
+              note: "Administrator-authorized force-stop failed.",
             });
           }
         }
@@ -1843,8 +1863,22 @@ function App() {
     if (!window.confirm(`Clear ${entry.name} cache?`)) return;
     try {
       await invoke("clear_cache_entry", { directoryName: entry.name });
+      recordOperation({
+        category: "Maintenance",
+        action: "Clear cache",
+        target: entry.name,
+        outcome: "success",
+        note: "Application cache folder was cleared.",
+      });
       await inspectCacheSizes();
     } catch (e) {
+      recordOperation({
+        category: "Maintenance",
+        action: "Clear cache",
+        target: entry.name,
+        outcome: "failed",
+        note: "Could not clear the cache folder.",
+      });
       setCacheError(String(e));
     }
   }
@@ -3331,7 +3365,6 @@ function App() {
       )}
     </div>
   );
-
   const renderActivity = () => (
     <div className="page-wrapper">
       <div className="page-header">
@@ -3340,20 +3373,6 @@ function App() {
           <p>Review local records of system actions.</p>
         </div>
         <div className="flex gap-4">
-          <button
-            className="btn btn-primary"
-            onClick={() =>
-              recordOperation({
-                category: "Process",
-                action: "Test Action",
-                target: "Test Target",
-                outcome: "success",
-                note: "This is a manual test entry.",
-              })
-            }
-          >
-            Add Test Entry
-          </button>
           <button className="btn btn-secondary" onClick={clearOperationHistory}>
             Clear history
           </button>
@@ -3368,15 +3387,22 @@ function App() {
               <thead>
                 <tr>
                   <th>Time</th>
+                  <th>Category</th>
                   <th>Action</th>
                   <th>Target</th>
                   <th>Outcome</th>
+                  <th>Note</th>
                 </tr>
               </thead>
               <tbody>
                 {operationHistory.map((o) => (
                   <tr key={o.id}>
-                    <td>{new Date(o.timestamp).toLocaleString()}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {new Date(o.timestamp).toLocaleString()}
+                    </td>
+                    <td>
+                      <span className="badge neutral">{o.category}</span>
+                    </td>
                     <td>{o.action}</td>
                     <td>{o.target}</td>
                     <td>
@@ -3386,6 +3412,7 @@ function App() {
                         {o.outcome}
                       </span>
                     </td>
+                    <td className="text-faint">{o.note}</td>
                   </tr>
                 ))}
               </tbody>
@@ -3395,7 +3422,6 @@ function App() {
       </div>
     </div>
   );
-
   const renderStartup = () => (
     <div className="page-wrapper">
       <div className="page-header">

@@ -1,10 +1,81 @@
-# Kestrel
+# Argus
 
-Kestrel is a local-first Linux workstation utility built with Tauri 2, React, TypeScript, and Rust. The goal is to bring system monitoring, process management, storage, hardware information, maintenance, and diagnostics into one clear desktop app. Kestrel is intentionally AI-free.
+Argus is a local-first Linux workstation utility built with Tauri 2, React, TypeScript, and Rust. It brings system monitoring, process management, storage, hardware information, maintenance, and diagnostics into one clear desktop app. Argus is intentionally AI-free.
 
-## Current prototype
+## Features
 
-The current prototype provides live CPU and memory readings, a Performance page with per-logical-processor load and swap usage, a bounded in-memory performance chart with 5, 15, and 30 minute views, an Overview storage panel, a Storage page with mounted-volume capacity, physical-drive health reported by UDisks, and partition discovery with user-confirmed UDisks mount and unmount controls, and a Processes page with live CPU/memory and per-process disk I/O rates, search, sorting, process state/parent/runtime details, and separately confirmed normal End and Force stop actions. When Linux denies a signal, Kestrel can request administrator authorization after another confirmation and rechecks the exact process identity; this requires a root-owned installed binary and is unavailable in development builds. Storage data refreshes every five seconds; process data refreshes only while its page is open. The Overview reports the highest available hardware temperature or clearly indicates when sensors are unavailable. The Network page shows live interface rates and local addresses, plus the configured default route and DNS resolver settings. Startup lists local login applications and lets the user enable or disable user entries directly or override system defaults for the current account; shared system files remain unchanged. Services shows system and user systemd status, with a read-only recent journal view for each service. Eligible services can be started, stopped, enabled, or disabled after confirmation; system-wide actions may require administrator authorization. Kestrel explains known risks and previews systemd-reported related units before service actions; systemd decides whether each action can run. System Information shows the local operating system, kernel, processor, memory, device architecture, desktop session, uptime, battery charge, estimated full-capacity health and charge cycles, and a read-only USB device inventory when Linux exposes them. The USB inventory excludes serial numbers and does not inspect device contents. Activity keeps a local history of process, service, startup, storage mount, and cache cleanup actions, with timestamps and outcomes. Diagnostics builds a local support summary, previews its contents, and saves only after the user chooses a location. Maintenance scans a chosen folder for large files, reports application cache sizes, supports explicit per-folder cleanup within the current account’s cache directory, and summarizes local log and journal disk usage without reading log contents. Settings stores local display preferences for temperature units and the default performance-chart time range. See [the current capability audit and roadmap](docs/CAPABILITY_AUDIT_AND_ROADMAP.md) for verified feature status, remaining restrictions, and next steps. The [Kestrel Project Blueprint](Kestrel_Project_Blueprint.docx) records the original project foundation and has historical feature-status tables.
+### Overview
+
+- Live CPU and memory readings
+- Highest available hardware temperature, or a clear indication when sensors are unavailable
+- Storage summary panel
+
+### Performance
+
+- Per-logical-processor load
+- Swap usage
+- Bounded in-memory performance chart with 5, 15, and 30 minute views
+
+### Processes
+
+- Live CPU, memory, and per-process disk I/O rates
+- Search, sorting, and process state/parent/runtime details
+- Separately confirmed normal End and Force stop actions
+- When Linux denies a signal, Argus can request administrator authorization after another confirmation and rechecks the exact process identity (requires a root-owned installed binary; unavailable in development builds)
+- Process data refreshes only while the page is open
+
+### Storage
+
+- Mounted-volume capacity
+- Physical-drive health reported by UDisks
+- Partition discovery with user-confirmed UDisks mount and unmount controls
+- Refreshes every five seconds
+
+### Network
+
+- Live interface rates and local addresses
+- Configured default route and DNS resolver settings
+
+### Startup
+
+- Lists local login applications
+- Enables or disables user entries directly, or overrides system defaults for the current account
+- Shared system files remain unchanged
+
+### Services
+
+- System and user systemd status
+- Read-only recent journal view for each service
+- Eligible services can be started, stopped, enabled, or disabled after confirmation; system-wide actions may require administrator authorization
+- Explains known risks and previews systemd-reported related units before actions; systemd decides whether each action can run
+
+### System Information
+
+- Local operating system, kernel, processor, memory, device architecture, desktop session, and uptime
+- Battery charge, estimated full-capacity health, and charge cycles
+- Read-only USB device inventory when Linux exposes it (excludes serial numbers and does not inspect device contents)
+
+### Activity
+
+- Local history of process, service, startup, storage mount, and cache cleanup actions, with timestamps and outcomes
+
+### Diagnostics
+
+- Builds a local support summary
+- Previews contents and saves only after the user chooses a location
+
+### Maintenance
+
+- Scans a chosen folder for large files
+- Reports application cache sizes
+- Supports explicit per-folder cleanup within the current account's cache directory
+- Summarizes local log and journal disk usage without reading log contents
+
+### Settings
+
+- Local display preferences for temperature units and the default performance-chart time range
+
+See [the capability audit and roadmap](docs/CAPABILITY_AUDIT_AND_ROADMAP.md) for verified feature status, remaining restrictions, and next steps. The [Argus Project Blueprint](Kestrel_Project_Blueprint.docx) (originally recorded as the Kestrel Project Blueprint) preserves the original project foundation and historical feature-status tables.
 
 ## Run on Linux
 
@@ -14,28 +85,3 @@ Install the Tauri Linux prerequisites for your distribution, then from this fold
 npm install
 npm run tauri dev
 ```
-
-The development app has been confirmed on Pop!_OS 24.04 LTS. Other Linux distributions may need different system packages.
-
-## Build
-
-```bash
-npm run build
-npm run tauri build
-```
-
-## Project structure
-
-- `src/` contains the React and TypeScript interface.
-- `src-tauri/src/` contains Rust commands and local system access.
-- `src-tauri/` contains Tauri configuration and packaging assets.
-
-## Product principles
-
-- Keep Kestrel’s monitoring and management work on the local device unless the user explicitly chooses an external connection or export.
-- Aim to expose the full practical range of local computer management through supported Linux interfaces; do not impose blanket restrictions on capable features.
-- Clearly distinguish implemented features from planned ones.
-- Before sensitive changes, explain what will change, which users or devices are affected, and the likely consequences; ask for confirmation and use normal operating-system authorization where required.
-- Match safeguards to the impact of an action, and support recovery or reversal where the system allows it.
-- Keep background work proportional to the active view.
-- Prefer Linux-native interfaces and report unavailable readings honestly.

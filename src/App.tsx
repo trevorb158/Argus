@@ -2521,28 +2521,31 @@ function App() {
             <span className="card-label">Top processes</span>
           </div>
           <div className="process-mini-list">
-            {processes.slice(0, 5).map((p) => (
-              <div className="process-mini-item" key={p.pid}>
-                <div className="process-mini-icon">
-                  <Icon path={icons.processes} size={14} />
+            {[...processes]
+              .sort((a, b) => b.cpuUsagePercent - a.cpuUsagePercent)
+              .slice(0, 5)
+              .map((p) => (
+                <div className="process-mini-item" key={p.pid}>
+                  <div className="process-mini-icon">
+                    <Icon path={icons.processes} size={14} />
+                  </div>
+                  <div className="process-mini-info">
+                    <strong>{p.name}</strong>
+                    <span>PID {p.pid}</span>
+                  </div>
+                  <div
+                    className="process-mini-value"
+                    style={{
+                      color:
+                        p.cpuUsagePercent > 50
+                          ? "var(--accent-red)"
+                          : "var(--accent-teal)",
+                    }}
+                  >
+                    {p.cpuUsagePercent.toFixed(1)}%
+                  </div>
                 </div>
-                <div className="process-mini-info">
-                  <strong>{p.name}</strong>
-                  <span>PID {p.pid}</span>
-                </div>
-                <div
-                  className="process-mini-value"
-                  style={{
-                    color:
-                      p.cpuUsagePercent > 50
-                        ? "var(--accent-red)"
-                        : "var(--accent-teal)",
-                  }}
-                >
-                  {p.cpuUsagePercent.toFixed(1)}%
-                </div>
-              </div>
-            ))}
+              ))}
           </div>
         </article>
         <article className="donut-card">

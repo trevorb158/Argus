@@ -2713,9 +2713,28 @@ function App() {
       <div className="page-header">
         <div>
           <h2>Storage</h2>
-          <p>Review mounted volumes and how their space is being used.</p>
+          <p>Review mounted volumes, partitions, and drive health.</p>
+        </div>
+        <div className="search-bar">
+          <Icon path={icons.search} size={14} />
+          <input
+            type="search"
+            placeholder="Search partitions..."
+            value={driveQuery}
+            onChange={(e) => setDriveQuery(e.target.value)}
+          />
         </div>
       </div>
+
+      {partitionActionStatus && (
+        <div
+          className={`panel-card mt-4 ${partitionActionStatus.kind === "error" ? "status-error" : "status-success"}`}
+          style={{ marginBottom: 16 }}
+        >
+          {partitionActionStatus.message}
+        </div>
+      )}
+
       <div className="stats-row">
         {drives.map((d) => {
           const used = d.totalBytes - d.availableBytes;
@@ -2741,29 +2760,139 @@ function App() {
           );
         })}
       </div>
+
+      <div className="panel-card mt-4">
+        <div className="flex justify-between items-center mb-4">
+          <h3>Partitions</h3>
+          {partitionLoading && <span className="text-faint">Refreshing…</span>}
+        </div>
+        {partitionError && (
+          <p className="text-muted" style={{ marginBottom: 12 }}>
+            {partitionError}
+          </p>
+        )}
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Device</th>
+                <th>Label</th>
+                <th>Filesystem</th>
+                <th>Size</th>
+                <th>Mounted at</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredPartitions.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="text-muted">
+                    {partitionLoading
+                      ? "Loading partitions…"
+                      : "No partitions found."}
+                  </td>
+                </tr>
+              ) : (
+                filteredPartitions.map((p) => {
+                  const isMounted = p.mountPoints.some(
+                    (m) => m && m !== "[SWAP]",
+                  );
+                  const isSwap = p.mountPoints.includes("[SWAP]");
+                  const canAct =
+                    p.deviceType === "part" &&
+                    !isSwap &&
+                    partitionActionPath === null;
+                  const busy = partitionActionPath === p.path;
+
+                  return (
+                    <tr key={p.path || p.name}>
+                      <td>
+                        <strong>{p.path || p.name}</strong>
+                        <div className="text-faint">{p.deviceType}</div>
+                      </td>
+                      <td>{p.label || "—"}</td>
+                      <td>
+                        <span className="badge neutral">
+                          {p.fileSystem || "—"}
+                        </span>
+                      </td>
+                      <td>{formatGiB(p.sizeBytes)} GiB</td>
+                      <td>
+                        {isSwap
+                          ? "[SWAP]"
+                          : isMounted
+                            ? p.mountPoints
+                                .filter((m) => m !== "[SWAP]")
+                                .join(", ")
+                            : "—"}
+                      </td>
+                      <td>
+                        {isSwap ? (
+                          <span className="text-faint">Swap</span>
+                        ) : isMounted ? (
+                          <button
+                            className="btn btn-secondary"
+                            disabled={!canAct || busy}
+                            onClick={() => void requestPartitionMount(p, false)}
+                          >
+                            {busy ? "Working…" : "Unmount"}
+                          </button>
+                        ) : (
+                          <button
+                            className="btn btn-primary"
+                            disabled={!canAct || busy}
+                            onClick={() => void requestPartitionMount(p, true)}
+                          >
+                            {busy ? "Working…" : "Mount"}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div className="panel-card mt-4">
         <h3>Physical drive health</h3>
         <div className="mt-4">
-          {driveHealth.map((d) => (
-            <div
-              className="flex justify-between items-center"
-              key={d.path}
-              style={{
-                padding: "12px 0",
-                borderBottom: "1px solid var(--border-subtle)",
-              }}
-            >
-              <div>
-                <strong>{d.model}</strong>
-                <div className="text-faint">{d.path}</div>
-              </div>
-              <span
-                className={`badge ${d.healthState === "healthy" ? "success" : "warning"}`}
+          {driveHealthLoading && driveHealth.length === 0 ? (
+            <p className="text-muted">Loading drive health…</p>
+          ) : driveHealthError ? (
+            <p className="text-muted">{driveHealthError}</p>
+          ) : driveHealth.length === 0 ? (
+            <p className="text-muted">No drive health data available.</p>
+          ) : (
+            driveHealth.map((d) => (
+              <div
+                className="flex justify-between items-center"
+                key={d.path}
+                style={{
+                  padding: "12px 0",
+                  borderBottom: "1px solid var(--border-subtle)",
+                }}
               >
-                {d.healthState}
-              </span>
-            </div>
-          ))}
+                <div>
+                  <strong>{d.model}</strong>
+                  <div className="text-faint">{d.path}</div>
+                </div>
+                <span
+                  className={`badge ${
+                    d.healthState === "healthy"
+                      ? "success"
+                      : d.healthState === "warning"
+                        ? "warning"
+                        : "neutral"
+                  }`}
+                >
+                  {d.healthState}
+                </span>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

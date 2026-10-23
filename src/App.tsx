@@ -1,8 +1,10 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
+import { useTheme } from "./useTheme";
 import "./App.css";
 
+// --- Types (preserved) ---
 type TelemetrySnapshot = {
   cpuUsagePercent: number;
   memoryUsedBytes: number;
@@ -20,13 +22,20 @@ type PerformanceSnapshot = {
   diskReadBytesPerSecond: number;
   diskWriteBytesPerSecond: number;
 };
-
 type TemperatureSnapshot = {
   label: string;
   temperatureCelsius: number;
   criticalCelsius: number | null;
 };
-
+type GpuSnapshot = {
+  name: string;
+  utilizationPercent: number;
+  vramUsedBytes: number;
+  vramTotalBytes: number;
+  temperatureCelsius: number | null;
+};
+type FanSnapshot = { label: string; rpm: number };
+type HardwareExtraSnapshot = { gpus: GpuSnapshot[]; fans: FanSnapshot[] };
 type NetworkCountersSnapshot = {
   name: string;
   macAddress: string;
@@ -35,12 +44,10 @@ type NetworkCountersSnapshot = {
   transmittedBytes: number;
   isLoopback: boolean;
 };
-
 type NetworkInterfaceSnapshot = NetworkCountersSnapshot & {
   downloadBytesPerSecond: number;
   uploadBytesPerSecond: number;
 };
-
 type NetworkRouteSnapshot = {
   defaultGateway: string | null;
   defaultInterface: string | null;
@@ -48,7 +55,14 @@ type NetworkRouteSnapshot = {
   gatewayError: string | null;
   dnsError: string | null;
 };
-
+type NetworkConnectionSnapshot = {
+  protocol: string;
+  state: string;
+  localAddress: string;
+  remoteAddress: string;
+  process: string;
+  pid: number | null;
+};
 type StartupAppSnapshot = {
   id: string;
   name: string;
@@ -58,9 +72,7 @@ type StartupAppSnapshot = {
   isSystemEntry: boolean;
   hasUserOverride: boolean;
 };
-
 type StartupActionStatus = { kind: "success" | "error"; message: string };
-
 type OperationRecord = {
   id: string;
   timestamp: number;
@@ -70,9 +82,7 @@ type OperationRecord = {
   outcome: "success" | "failed";
   note: string;
 };
-
 type OperationDetails = Omit<OperationRecord, "id" | "timestamp">;
-
 type ServiceSnapshot = {
   unit: string;
   description: string;
@@ -81,7 +91,6 @@ type ServiceSnapshot = {
   subState: string;
   startupState: string;
 };
-
 type ServiceInventory = { services: ServiceSnapshot[]; warnings: string[] };
 type ServiceActionPreview = {
   relationship: string;
@@ -123,10 +132,10 @@ type SystemInfoSnapshot = {
   batteries: BatterySnapshot[];
   usbDevices: UsbDeviceSnapshot[];
 };
-type DiagnosticsSnapshot = Omit<SystemInfoSnapshot, "hostName" | "batteries"> & {
-  cpuUsagePercent: number;
-  memoryUsedBytes: number;
-};
+type DiagnosticsSnapshot = Omit<
+  SystemInfoSnapshot,
+  "hostName" | "batteries"
+> & { cpuUsagePercent: number; memoryUsedBytes: number };
 type DiagnosticsStatus = { kind: "success" | "error"; message: string };
 type LargeFileSnapshot = { path: string; sizeBytes: number };
 type LargeFileScanResult = {
@@ -137,7 +146,12 @@ type LargeFileScanResult = {
   scanLimited: boolean;
   resultsLimited: boolean;
 };
-type CacheEntrySnapshot = { name: string; sizeBytes: number; fileCount: number; clearable: boolean };
+type CacheEntrySnapshot = {
+  name: string;
+  sizeBytes: number;
+  fileCount: number;
+  clearable: boolean;
+};
 type CacheInventorySnapshot = {
   entries: CacheEntrySnapshot[];
   totalBytes: number;
@@ -158,7 +172,6 @@ type LogInventorySnapshot = {
   journalUsage: string | null;
   journalError: string | null;
 };
-
 type DriveSnapshot = {
   name: string;
   mountPoint: string;
@@ -167,7 +180,6 @@ type DriveSnapshot = {
   availableBytes: number;
   isRemovable: boolean;
 };
-
 type DriveHealthSnapshot = {
   path: string;
   model: string;
@@ -179,7 +191,6 @@ type DriveHealthSnapshot = {
   attributesFailing: number | null;
   smartUpdatedUnixSeconds: number | null;
 };
-
 type PartitionSnapshot = {
   name: string;
   path: string;
@@ -190,16 +201,22 @@ type PartitionSnapshot = {
   mountPoints: string[];
   isRemovable: boolean;
 };
-
 type SystemLogEntry = {
   timestampMicros: number;
   source: string;
-  severity: "Emergency" | "Alert" | "Critical" | "Error" | "Warning" | "Notice" | "Info" | "Debug";
+  severity:
+    | "Emergency"
+    | "Alert"
+    | "Critical"
+    | "Error"
+    | "Warning"
+    | "Notice"
+    | "Info"
+    | "Debug";
   message: string;
 };
 type LogSeverityFilter = "all" | "errors" | "warnings" | "info" | "debug";
 type LogTimeRange = "all" | "1h" | "6h" | "24h";
-
 type ProcessSnapshot = {
   pid: number;
   name: string;
@@ -214,47 +231,104 @@ type ProcessSnapshot = {
   diskReadBytesPerSecond: number | null;
   diskWriteBytesPerSecond: number | null;
 };
-type RawProcessSnapshot = Omit<ProcessSnapshot, "diskReadBytesPerSecond" | "diskWriteBytesPerSecond">;
-
+type RawProcessSnapshot = Omit<
+  ProcessSnapshot,
+  "diskReadBytesPerSecond" | "diskWriteBytesPerSecond"
+>;
+type PackageSnapshot = {
+  name: string;
+  version: string;
+  architecture: string;
+  status: string;
+  section: string;
+  installedSizeBytes: number | null;
+  summary: string;
+  automatic: boolean;
+  upgradeVersion: string | null;
+  source: string;
+};
+type PackageInventory = {
+  backend: string;
+  backendDetail: string;
+  packages: PackageSnapshot[];
+  warnings: string[];
+  lastIndexUnixSeconds: number | null;
+};
+type PackageFilter = "all" | "upgradable" | "automatic";
+type PackageSourceFilter = "all" | "APT" | "Flatpak" | "Snap";
+type SystemHealthAlert = {
+  severity: "critical" | "warning" | "info";
+  title: string;
+  message: string;
+  actionPage: string | null;
+  actionLabel: string | null;
+};
+type SystemHealthSnapshot = { alerts: SystemHealthAlert[]; healthy: boolean };
 type ProcessActionStatus = { kind: "success" | "error"; message: string };
 type TemperatureUnit = "celsius" | "fahrenheit";
-
-type AppPage = "overview" | "processes" | "storage" | "network" | "startup" | "services" | "system" | "diagnostics" | "logs" | "activity" | "maintenance" | "settings" | "performance" | "sensors";
+type AppPage =
+  | "overview"
+  | "processes"
+  | "storage"
+  | "network"
+  | "connections"
+  | "startup"
+  | "services"
+  | "software"
+  | "system"
+  | "diagnostics"
+  | "logs"
+  | "activity"
+  | "maintenance"
+  | "settings"
+  | "performance"
+  | "sensors";
 type ProcessSortKey = "name" | "pid" | "cpu" | "memory" | "read" | "write";
 type ProcessSort = { key: ProcessSortKey; direction: "asc" | "desc" };
 type ProcessStateFilter = "all" | "running" | "sleeping" | "stopped" | "zombie";
 type ProcessViewMode = "list" | "tree";
-type ProcessTreeRow = { process: ProcessSnapshot; depth: number; childCount: number };
-
+type ProcessTreeRow = {
+  process: ProcessSnapshot;
+  depth: number;
+  childCount: number;
+};
 type HistorySample = {
   timestamp: number;
   cpuPercent: number;
   memoryPercent: number;
 };
+type CommandItem = {
+  id: string;
+  label: string;
+  category: string;
+  action: () => void;
+  icon: string;
+};
 
+// --- Helpers ---
 function formatGiB(bytes: number) {
   return (bytes / 1024 ** 3).toFixed(1);
 }
-
 function formatSystemLogTimestamp(timestampMicros: number) {
   if (!timestampMicros) return "Time unavailable";
   const date = new Date(timestampMicros / 1000);
-  return Number.isNaN(date.getTime()) ? "Time unavailable" : date.toLocaleString();
+  return Number.isNaN(date.getTime())
+    ? "Time unavailable"
+    : date.toLocaleString();
 }
-
 function formatProcessMemory(bytes: number) {
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
   if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MiB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`;
   return `${bytes} B`;
 }
-
 function formatNetworkRate(bytesPerSecond: number) {
-  if (bytesPerSecond >= 1024 ** 2) return `${(bytesPerSecond / 1024 ** 2).toFixed(1)} MiB/s`;
-  if (bytesPerSecond >= 1024) return `${(bytesPerSecond / 1024).toFixed(1)} KiB/s`;
+  if (bytesPerSecond >= 1024 ** 2)
+    return `${(bytesPerSecond / 1024 ** 2).toFixed(1)} MiB/s`;
+  if (bytesPerSecond >= 1024)
+    return `${(bytesPerSecond / 1024).toFixed(1)} KiB/s`;
   return `${Math.round(bytesPerSecond)} B/s`;
 }
-
 function formatProcessRuntime(seconds: number) {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
@@ -265,13 +339,11 @@ function formatProcessRuntime(seconds: number) {
   if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
   return `${remainingSeconds}s`;
 }
-
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "Unavailable";
-  const gib = bytes / (1024 ** 3);
+  const gib = bytes / 1024 ** 3;
   return `${gib.toFixed(1)} GiB`;
 }
-
 function formatUptime(seconds: number): string {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
@@ -281,119 +353,168 @@ function formatUptime(seconds: number): string {
   return `${minutes}m`;
 }
 
-const OPERATION_HISTORY_KEY = "kestrel.operation-history";
-const MAX_OPERATION_HISTORY = 250;
+function buildSmoothPath(points: { x: number; y: number }[]): string {
+  if (points.length === 0) return "";
+  if (points.length === 1) return `M ${points[0].x},${points[0].y}`;
+  let d = `M ${points[0].x},${points[0].y}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i === 0 ? 0 : i - 1];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2 >= points.length ? points.length - 1 : i + 2];
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.x},${p2.y}`;
+  }
+  return d;
+}
 
+const OPERATION_HISTORY_KEY = "argus.operation-history";
+const MAX_OPERATION_HISTORY = 250;
 function readOperationHistory(): OperationRecord[] {
   try {
-    const value: unknown = JSON.parse(localStorage.getItem(OPERATION_HISTORY_KEY) ?? "[]");
+    const raw = localStorage.getItem(OPERATION_HISTORY_KEY);
+    console.log("Reading history from storage:", raw);
+    if (!raw) return [];
+    const value: unknown = JSON.parse(raw);
     if (!Array.isArray(value)) return [];
-    return value.filter((entry): entry is OperationRecord =>
-      typeof entry === "object" && entry !== null
-      && typeof entry.id === "string"
-      && typeof entry.timestamp === "number"
-      && ["Process", "Service", "Startup", "Storage", "Maintenance"].includes(entry.category)
-      && typeof entry.action === "string"
-      && typeof entry.target === "string"
-      && (entry.outcome === "success" || entry.outcome === "failed")
-      && typeof entry.note === "string",
-    ).slice(0, MAX_OPERATION_HISTORY);
-  } catch {
+    return value
+      .filter(
+        (entry): entry is OperationRecord =>
+          typeof entry === "object" &&
+          entry !== null &&
+          typeof entry.id === "string" &&
+          typeof entry.timestamp === "number" &&
+          ["Process", "Service", "Startup", "Storage", "Maintenance"].includes(
+            entry.category,
+          ) &&
+          typeof entry.action === "string" &&
+          typeof entry.target === "string" &&
+          (entry.outcome === "success" || entry.outcome === "failed") &&
+          typeof entry.note === "string",
+      )
+      .slice(0, MAX_OPERATION_HISTORY);
+  } catch (e) {
+    console.error("Error reading history:", e);
     return [];
   }
 }
-
 function appendOperationHistory(details: OperationDetails): OperationRecord[] {
   const entry: OperationRecord = {
     ...details,
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
     timestamp: Date.now(),
   };
-  const next = [entry, ...readOperationHistory()].slice(0, MAX_OPERATION_HISTORY);
+  const next = [entry, ...readOperationHistory()].slice(
+    0,
+    MAX_OPERATION_HISTORY,
+  );
   try {
     localStorage.setItem(OPERATION_HISTORY_KEY, JSON.stringify(next));
-  } catch {
-    // Keep the in-memory record visible for this session if local storage is unavailable.
+    console.log("Saved history successfully. Total entries:", next.length);
+  } catch (e) {
+    console.error("LocalStorage set failed:", e);
   }
   return next;
 }
-
 function readTemperatureUnit(): TemperatureUnit {
   try {
-    return localStorage.getItem("kestrel.temperature-unit") === "fahrenheit" ? "fahrenheit" : "celsius";
+    return localStorage.getItem("argus.temperature-unit") === "fahrenheit"
+      ? "fahrenheit"
+      : "celsius";
   } catch {
     return "celsius";
   }
 }
-
 function readHistoryWindow(): number {
   try {
-    const saved = Number(localStorage.getItem("kestrel.history-window"));
+    const saved = Number(localStorage.getItem("argus.history-window"));
     return [300, 900, 1800].includes(saved) ? saved : 300;
   } catch {
     return 300;
   }
 }
 
-function serviceActionImpact(service: ServiceSnapshot, action: "start" | "stop" | "enable" | "disable") {
-  const unit = service.unit.toLowerCase();
-  const isStopping = action === "stop";
-  const isDisabling = action === "disable";
-  const isStarting = action === "start";
-  const scope = service.scope === "System" ? "the system" : "your user session";
-  const general = isStopping
-    ? `This stops the service in ${scope} and may interrupt apps or features that depend on it.`
-    : isDisabling
-      ? `This prevents the service from starting automatically in ${scope}; it does not stop a currently running service.`
-      : isStarting
-        ? `This starts the service in ${scope} now and may also start its dependencies.`
-        : `This allows the service to start automatically in ${scope}.`;
-  const risk =
-    /^(networkmanager|networking|wpa_supplicant|systemd-networkd|iwd)(@.*)?\.service$/.test(unit)
-      ? isStopping
-        ? " It may disconnect Wi-Fi, Internet, VPN, or local network access; a remote session could be lost."
-        : isDisabling
-          ? " Network access may not be available after the next restart or login."
-          : " This affects network connectivity."
-      : /^(display-manager|gdm|gdm3|sddm|lightdm)(@.*)?\.service$/.test(unit)
-        ? isStopping
-          ? " This can end the graphical desktop session and close its apps. Save your work first."
-          : isDisabling
-            ? " The graphical login screen may be unavailable after the next restart."
-            : " This affects the graphical login session."
-        : /^(ssh|sshd)\.service$/.test(unit)
-          ? isStopping
-            ? " Remote SSH sessions or new remote logins may be interrupted."
-            : isDisabling
-              ? " New SSH logins will be unavailable after the next restart."
-              : " This affects remote SSH access."
-          : /^(ufw|nftables|firewalld)\.service$/.test(unit)
-            ? isStopping
-              ? " Firewall filtering may change immediately, which can affect network exposure."
-              : isDisabling
-                ? " Firewall filtering may be absent after the next restart."
-                : " This affects firewall filtering."
-            : /^(udisks2|multipathd)\.service$/.test(unit) || /^(lvm2-|cryptsetup-)/.test(unit)
-              ? " This may affect mounted, encrypted, or managed storage devices and access to their data."
-              : /^(systemd-|dbus|polkit)\.service$/.test(unit)
-                ? " This is a core session or system service. Changing it can make the desktop or system unstable, interrupt authorization, or prevent further management."
-                : "";
-  const authorization = service.scope === "System" ? " Linux may request administrator authorization or refuse an operation the system considers unavailable." : "";
-  return `${general}${risk}${authorization}`;
-}
+// --- Icons ---
+const Icon = ({
+  path,
+  size = 18,
+  className = "",
+}: {
+  path: string;
+  size?: number;
+  className?: string;
+}) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
+    <path d={path} />
+  </svg>
+);
+const icons = {
+  overview: "M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z",
+  performance: "M12 20V10M18 20V4M6 20v-4",
+  processes: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
+  activity: "M22 12h-4l-3 9L9 3l-3 9H2",
+  storage:
+    "M4 6c0 1.1 3.6 2 8 2s8-.9 8-2-3.6-2-8-2-8 .9-8 2zM4 6v12c0 1.1 3.6 2 8 2s8-.9 8-2V6M4 12c0 1.1 3.6 2 8 2s8-.9 8-2",
+  sensors: "M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z",
+  system: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 16v-4M12 8h.01",
+  network:
+    "M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01",
+  connections: "M8 12h8M12 8v8",
+  startup: "M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
+  services:
+    "M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83",
+  software:
+    "M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z",
+  maintenance:
+    "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
+  diagnostics: "M22 12h-4l-3 9L9 3l-3 9H2",
+  logs: "M4 6h16M4 12h16M4 18h16",
+  settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  search: "M21 21l-6-6m2-5a7 7 0 1 1-14 0 7 7 0 0 1 14 0z",
+  calendar:
+    "M8 2v4M16 2v4M3 10h18M21 6v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+  moon: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z",
+  sun: "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42",
+  arrowUpRight: "M7 17L17 7M7 7h10v10",
+  chevronRight: "M9 18l6-6-6-6",
+  chevronDown: "M6 9l6 6 6-6",
+  plus: "M12 5v14M5 12h14",
+};
 
 function App() {
+  const { mode, setMode } = useTheme();
+
+  // --- State ---
   const [page, setPage] = useState<AppPage>("overview");
-  const [operationHistory, setOperationHistory] = useState<OperationRecord[]>(readOperationHistory);
+  const [username, setUsername] = useState("User");
+  const [operationHistory, setOperationHistory] =
+    useState<OperationRecord[]>(readOperationHistory);
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot | null>(null);
   const [telemetryError, setTelemetryError] = useState<string | null>(null);
   const [temperatures, setTemperatures] = useState<TemperatureSnapshot[]>([]);
   const [temperatureError, setTemperatureError] = useState<string | null>(null);
   const [temperatureLoading, setTemperatureLoading] = useState(false);
+  const [hardwareExtra, setHardwareExtra] =
+    useState<HardwareExtraSnapshot | null>(null);
   const [history, setHistory] = useState<HistorySample[]>([]);
   const [historyWindow, setHistoryWindow] = useState(readHistoryWindow);
-  const [temperatureUnit, setTemperatureUnit] = useState<TemperatureUnit>(readTemperatureUnit);
-  const [performanceSnapshot, setPerformanceSnapshot] = useState<PerformanceSnapshot | null>(null);
+  const [temperatureUnit, setTemperatureUnit] =
+    useState<TemperatureUnit>(readTemperatureUnit);
+  const [performanceSnapshot, setPerformanceSnapshot] =
+    useState<PerformanceSnapshot | null>(null);
   const [performanceError, setPerformanceError] = useState<string | null>(null);
   const [performanceLoading, setPerformanceLoading] = useState(false);
   const [drives, setDrives] = useState<DriveSnapshot[]>([]);
@@ -406,15 +527,29 @@ function App() {
   const [partitionError, setPartitionError] = useState<string | null>(null);
   const [partitionLoading, setPartitionLoading] = useState(false);
   const [partitionRefreshKey, setPartitionRefreshKey] = useState(0);
-  const [partitionActionPath, setPartitionActionPath] = useState<string | null>(null);
-  const [partitionActionStatus, setPartitionActionStatus] = useState<StartupActionStatus | null>(null);
-  const [networkInterfaces, setNetworkInterfaces] = useState<NetworkInterfaceSnapshot[]>([]);
+  const [partitionActionPath, setPartitionActionPath] = useState<string | null>(
+    null,
+  );
+  const [partitionActionStatus, setPartitionActionStatus] =
+    useState<StartupActionStatus | null>(null);
+  const [networkInterfaces, setNetworkInterfaces] = useState<
+    NetworkInterfaceSnapshot[]
+  >([]);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [networkLoading, setNetworkLoading] = useState(false);
-  const [networkRouteInfo, setNetworkRouteInfo] = useState<NetworkRouteSnapshot | null>(null);
+  const [networkRouteInfo, setNetworkRouteInfo] =
+    useState<NetworkRouteSnapshot | null>(null);
   const [networkRouteLoading, setNetworkRouteLoading] = useState(false);
-  const [networkRouteError, setNetworkRouteError] = useState<string | null>(null);
+  const [networkRouteError, setNetworkRouteError] = useState<string | null>(
+    null,
+  );
   const [networkRouteRefreshKey, setNetworkRouteRefreshKey] = useState(0);
+  const [connections, setConnections] = useState<NetworkConnectionSnapshot[]>(
+    [],
+  );
+  const [connectionsLoading, setConnectionsLoading] = useState(false);
+  const [connectionsError, setConnectionsError] = useState<string | null>(null);
+  const [connectionsQuery, setConnectionsQuery] = useState("");
   const [startupApps, setStartupApps] = useState<StartupAppSnapshot[]>([]);
   const [startupError, setStartupError] = useState<string | null>(null);
   const [startupLoading, setStartupLoading] = useState(false);
@@ -431,81 +566,172 @@ function App() {
   const [serviceFilter, setServiceFilter] = useState<ServiceFilter>("all");
   const [serviceVisibleCount, setServiceVisibleCount] = useState(60);
   const [serviceRefreshKey, setServiceRefreshKey] = useState(0);
-  const [serviceActionUnit, setServiceActionUnit] = useState<string | null>(null);
-  const [serviceActionPhase, setServiceActionPhase] = useState<"preview" | "action">("preview");
-  const [serviceActionStatus, setServiceActionStatus] = useState<StartupActionStatus | null>(null);
-  const [serviceLogTarget, setServiceLogTarget] = useState<ServiceSnapshot | null>(null);
+  const [serviceActionUnit, setServiceActionUnit] = useState<string | null>(
+    null,
+  );
+  const [serviceActionPhase, setServiceActionPhase] = useState<
+    "preview" | "action"
+  >("preview");
+  const [serviceActionStatus, setServiceActionStatus] =
+    useState<StartupActionStatus | null>(null);
+  const [serviceLogTarget, setServiceLogTarget] =
+    useState<ServiceSnapshot | null>(null);
   const [serviceLogs, setServiceLogs] = useState<SystemLogEntry[]>([]);
   const [serviceLogsLoading, setServiceLogsLoading] = useState(false);
   const [serviceLogsError, setServiceLogsError] = useState<string | null>(null);
+  const [packageInventory, setPackageInventory] =
+    useState<PackageInventory | null>(null);
+  const [packageLoading, setPackageLoading] = useState(false);
+  const [packageError, setPackageError] = useState<string | null>(null);
+  const [packageQuery, setPackageQuery] = useState("");
+  const [packageFilter, setPackageFilter] =
+    useState<PackageFilter>("upgradable");
+  const [packageSourceFilter, setPackageSourceFilter] =
+    useState<PackageSourceFilter>("all");
+  const [packageVisibleCount, setPackageVisibleCount] = useState(100);
+  const [cleanLoading, setCleanLoading] = useState(false);
+  const [cleanStatus, setCleanStatus] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [healthSnapshot, setHealthSnapshot] =
+    useState<SystemHealthSnapshot | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [healthError, setHealthError] = useState<string | null>(null);
   const [systemInfo, setSystemInfo] = useState<SystemInfoSnapshot | null>(null);
   const [systemInfoError, setSystemInfoError] = useState<string | null>(null);
   const [systemInfoLoading, setSystemInfoLoading] = useState(false);
-  const [diagnosticsSnapshot, setDiagnosticsSnapshot] = useState<DiagnosticsSnapshot | null>(null);
+  const [diagnosticsSnapshot, setDiagnosticsSnapshot] =
+    useState<DiagnosticsSnapshot | null>(null);
   const [diagnosticsReport, setDiagnosticsReport] = useState("");
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [diagnosticsSaving, setDiagnosticsSaving] = useState(false);
-  const [diagnosticsStatus, setDiagnosticsStatus] = useState<DiagnosticsStatus | null>(null);
-  const [largeFileScan, setLargeFileScan] = useState<LargeFileScanResult | null>(null);
+  const [diagnosticsStatus, setDiagnosticsStatus] =
+    useState<DiagnosticsStatus | null>(null);
+  const [largeFileScan, setLargeFileScan] =
+    useState<LargeFileScanResult | null>(null);
   const [largeFileMinimum, setLargeFileMinimum] = useState(100 * 1024 * 1024);
   const [largeFileLoading, setLargeFileLoading] = useState(false);
   const [largeFileError, setLargeFileError] = useState<string | null>(null);
-  const [cacheInventory, setCacheInventory] = useState<CacheInventorySnapshot | null>(null);
+  const [cacheInventory, setCacheInventory] =
+    useState<CacheInventorySnapshot | null>(null);
   const [cacheLoading, setCacheLoading] = useState(false);
   const [cacheError, setCacheError] = useState<string | null>(null);
   const [cacheActionName, setCacheActionName] = useState<string | null>(null);
-  const [cacheActionStatus, setCacheActionStatus] = useState<{ kind: "success" | "error"; message: string } | null>(null);
-  const [logInventory, setLogInventory] = useState<LogInventorySnapshot | null>(null);
+  const [cacheActionStatus, setCacheActionStatus] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [logInventory, setLogInventory] = useState<LogInventorySnapshot | null>(
+    null,
+  );
   const [logLoading, setLogLoading] = useState(false);
   const [logError, setLogError] = useState<string | null>(null);
   const [systemLogs, setSystemLogs] = useState<SystemLogEntry[]>([]);
   const [systemLogsLoading, setSystemLogsLoading] = useState(false);
   const [systemLogsError, setSystemLogsError] = useState<string | null>(null);
   const [systemLogsQuery, setSystemLogsQuery] = useState("");
-  const [systemLogsSeverity, setSystemLogsSeverity] = useState<LogSeverityFilter>("all");
-  const [systemLogsTimeRange, setSystemLogsTimeRange] = useState<LogTimeRange>("all");
+  const [systemLogsSeverity, setSystemLogsSeverity] =
+    useState<LogSeverityFilter>("all");
+  const [systemLogsTimeRange, setSystemLogsTimeRange] =
+    useState<LogTimeRange>("all");
   const [systemLogsRefreshKey, setSystemLogsRefreshKey] = useState(0);
   const [systemLogsExporting, setSystemLogsExporting] = useState(false);
-  const [systemLogsStatus, setSystemLogsStatus] = useState<{ kind: "success" | "error"; message: string } | null>(null);
-  const previousNetworkCounters = useRef<Record<string, {
-    receivedBytes: number;
-    transmittedBytes: number;
-    sampleTime: number;
-  }>>({});
+  const [systemLogsStatus, setSystemLogsStatus] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
   const [driveQuery, setDriveQuery] = useState("");
   const [processes, setProcesses] = useState<ProcessSnapshot[]>([]);
   const [processError, setProcessError] = useState<string | null>(null);
   const [processLoading, setProcessLoading] = useState(false);
   const [processQuery, setProcessQuery] = useState("");
-  const [processStateFilter, setProcessStateFilter] = useState<ProcessStateFilter>("all");
-  const [processViewMode, setProcessViewMode] = useState<ProcessViewMode>("list");
-  const [collapsedProcessPids, setCollapsedProcessPids] = useState<number[]>([]);
+  const [processStateFilter, setProcessStateFilter] =
+    useState<ProcessStateFilter>("all");
+  const [processViewMode, setProcessViewMode] =
+    useState<ProcessViewMode>("list");
+  const [collapsedProcessPids, setCollapsedProcessPids] = useState<number[]>(
+    [],
+  );
   const [processSort, setProcessSort] = useState<ProcessSort>({
     key: "cpu",
     direction: "desc",
   });
   const [terminatingPid, setTerminatingPid] = useState<number | null>(null);
-  const [selectedProcessPid, setSelectedProcessPid] = useState<number | null>(null);
+  const [selectedProcessPid, setSelectedProcessPid] = useState<number | null>(
+    null,
+  );
   const [processActionStatus, setProcessActionStatus] =
     useState<ProcessActionStatus | null>(null);
-  const previousProcessIoCounters = useRef<Record<string, { read: number; write: number; time: number }>>({});
+
+  // --- Sidebar State ---
+  const [openGroup, setOpenGroup] = useState<string | null>("Dashboard");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // --- Command Palette State ---
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
+  const paletteInputRef = useRef<HTMLInputElement>(null);
+
+  // --- Refs ---
+  const previousNetworkCounters = useRef<
+    Record<
+      string,
+      { receivedBytes: number; transmittedBytes: number; sampleTime: number }
+    >
+  >({});
+  const previousProcessIoCounters = useRef<
+    Record<string, { read: number; write: number; time: number }>
+  >({});
+
+  // --- Effects ---
+  useEffect(() => {
+    invoke<string>("get_username")
+      .then(setUsername)
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     try {
-      localStorage.setItem("kestrel.temperature-unit", temperatureUnit);
-      localStorage.setItem("kestrel.history-window", String(historyWindow));
-    } catch {
-      // Preferences still work for this session if local storage is unavailable.
-    }
+      localStorage.setItem("argus.temperature-unit", temperatureUnit);
+      localStorage.setItem("argus.history-window", String(historyWindow));
+    } catch {}
   }, [temperatureUnit, historyWindow]);
+
+  // DEBUG LOG: Track operation history changes
+  useEffect(() => {
+    console.log("Operation History state changed:", operationHistory);
+  }, [operationHistory]);
+
+  // Global Keyboard Listener for Command Palette
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setIsPaletteOpen((prev) => !prev);
+        setPaletteQuery("");
+        setSelectedCommandIndex(0);
+      }
+      if (e.key === "Escape" && isPaletteOpen) {
+        setIsPaletteOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isPaletteOpen]);
+
+  useEffect(() => {
+    if (isPaletteOpen && paletteInputRef.current) {
+      paletteInputRef.current.focus();
+    }
+  }, [isPaletteOpen]);
 
   useEffect(() => {
     let active = true;
-
     async function refreshTelemetry() {
       try {
         const snapshot = await invoke<TelemetrySnapshot>("get_telemetry");
-
         if (active) {
           setTelemetry(snapshot);
           setTelemetryError(null);
@@ -519,7 +745,8 @@ function App() {
                       0,
                       Math.min(
                         100,
-                        (snapshot.memoryUsedBytes / snapshot.memoryTotalBytes) * 100,
+                        (snapshot.memoryUsedBytes / snapshot.memoryTotalBytes) *
+                          100,
                       ),
                     )
                   : 0,
@@ -528,18 +755,11 @@ function App() {
           });
         }
       } catch (error) {
-        if (active) {
-          setTelemetryError(String(error));
-        }
+        if (active) setTelemetryError(String(error));
       }
     }
-
     void refreshTelemetry();
-
-    const intervalId = window.setInterval(() => {
-      void refreshTelemetry();
-    }, 1000);
-
+    const intervalId = window.setInterval(() => void refreshTelemetry(), 1000);
     return () => {
       active = false;
       window.clearInterval(intervalId);
@@ -547,15 +767,36 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (page !== "overview" && page !== "sensors") return;
+    if (page !== "overview" && page !== "sensors" && page !== "performance")
+      return;
+    let active = true;
+    let timeoutId = 0;
+    async function refreshHardware() {
+      try {
+        const extra = await invoke<HardwareExtraSnapshot>("get_hardware_extra");
+        if (active) setHardwareExtra(extra);
+      } catch {
+      } finally {
+        if (active)
+          timeoutId = window.setTimeout(() => void refreshHardware(), 2000);
+      }
+    }
+    void refreshHardware();
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [page]);
 
+  useEffect(() => {
+    if (page !== "overview" && page !== "sensors") return;
     let active = true;
     let timeoutId = 0;
     setTemperatureLoading(true);
-
     async function refreshTemperatures() {
       try {
-        const snapshot = await invoke<TemperatureSnapshot[]>("get_temperatures");
+        const snapshot =
+          await invoke<TemperatureSnapshot[]>("get_temperatures");
         if (active) {
           setTemperatures(snapshot);
           setTemperatureError(null);
@@ -572,7 +813,6 @@ function App() {
         }
       }
     }
-
     void refreshTemperatures();
     return () => {
       active = false;
@@ -582,28 +822,19 @@ function App() {
 
   useEffect(() => {
     let active = true;
-
     async function refreshStorage() {
       try {
         const snapshot = await invoke<DriveSnapshot[]>("get_storage");
-
         if (active) {
           setDrives(snapshot);
           setStorageError(null);
         }
       } catch (error) {
-        if (active) {
-          setStorageError(String(error));
-        }
+        if (active) setStorageError(String(error));
       }
     }
-
     void refreshStorage();
-
-    const intervalId = window.setInterval(() => {
-      void refreshStorage();
-    }, 5000);
-
+    const intervalId = window.setInterval(() => void refreshStorage(), 5000);
     return () => {
       active = false;
       window.clearInterval(intervalId);
@@ -612,11 +843,9 @@ function App() {
 
   useEffect(() => {
     if (page !== "storage") return;
-
     let active = true;
     let timeoutId = 0;
     setPartitionLoading(true);
-
     async function refreshPartitions() {
       try {
         const snapshot = await invoke<PartitionSnapshot[]>("get_partitions");
@@ -633,7 +862,6 @@ function App() {
         }
       }
     }
-
     void refreshPartitions();
     return () => {
       active = false;
@@ -643,14 +871,13 @@ function App() {
 
   useEffect(() => {
     if (page !== "storage") return;
-
     let active = true;
     let timeoutId = 0;
     setDriveHealthLoading(true);
-
     async function refreshDriveHealth() {
       try {
-        const snapshot = await invoke<DriveHealthSnapshot[]>("get_drive_health");
+        const snapshot =
+          await invoke<DriveHealthSnapshot[]>("get_drive_health");
         if (active) {
           setDriveHealth(snapshot);
           setDriveHealthError(null);
@@ -664,7 +891,6 @@ function App() {
         }
       }
     }
-
     void refreshDriveHealth();
     return () => {
       active = false;
@@ -674,14 +900,14 @@ function App() {
 
   useEffect(() => {
     if (page !== "performance") return;
-
     let active = true;
     let timeoutId = 0;
-
     async function refreshPerformance() {
       setPerformanceLoading(true);
       try {
-        const snapshot = await invoke<PerformanceSnapshot>("get_performance_snapshot");
+        const snapshot = await invoke<PerformanceSnapshot>(
+          "get_performance_snapshot",
+        );
         if (active) {
           setPerformanceSnapshot(snapshot);
           setPerformanceError(null);
@@ -695,7 +921,6 @@ function App() {
         }
       }
     }
-
     void refreshPerformance();
     return () => {
       active = false;
@@ -705,7 +930,6 @@ function App() {
 
   useEffect(() => {
     if (page !== "services") return;
-
     let active = true;
     setServiceLoading(true);
     invoke<ServiceInventory>("get_services")
@@ -726,15 +950,63 @@ function App() {
       .finally(() => {
         if (active) setServiceLoading(false);
       });
-
     return () => {
       active = false;
     };
   }, [page, serviceRefreshKey]);
 
   useEffect(() => {
-    if (page !== "system") return;
+    if (page !== "software") return;
+    let active = true;
+    setPackageLoading(true);
+    invoke<PackageInventory>("get_package_inventory")
+      .then((inventory) => {
+        if (active) {
+          setPackageInventory(inventory);
+          setPackageError(null);
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setPackageInventory(null);
+          setPackageError(String(error));
+        }
+      })
+      .finally(() => {
+        if (active) setPackageLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [page]);
 
+  useEffect(() => {
+    if (page !== "diagnostics") return;
+    let active = true;
+    setHealthLoading(true);
+    invoke<SystemHealthSnapshot>("get_system_health")
+      .then((snapshot) => {
+        if (active) {
+          setHealthSnapshot(snapshot);
+          setHealthError(null);
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setHealthSnapshot(null);
+          setHealthError(String(error));
+        }
+      })
+      .finally(() => {
+        if (active) setHealthLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "system") return;
     let active = true;
     setSystemInfoLoading(true);
     invoke<SystemInfoSnapshot>("get_system_info")
@@ -750,7 +1022,6 @@ function App() {
       .finally(() => {
         if (active) setSystemInfoLoading(false);
       });
-
     return () => {
       active = false;
     };
@@ -758,7 +1029,6 @@ function App() {
 
   useEffect(() => {
     if (page !== "startup") return;
-
     let active = true;
     setStartupLoading(true);
     invoke<StartupAppSnapshot[]>("get_startup_apps")
@@ -777,7 +1047,6 @@ function App() {
       .finally(() => {
         if (active) setStartupLoading(false);
       });
-
     return () => {
       active = false;
     };
@@ -785,15 +1054,15 @@ function App() {
 
   useEffect(() => {
     if (page !== "network") return;
-
     let active = true;
     let timeoutId = 0;
     previousNetworkCounters.current = {};
     setNetworkLoading(true);
-
     async function refreshNetworkInterfaces() {
       try {
-        const snapshot = await invoke<NetworkCountersSnapshot[]>("get_network_interfaces");
+        const snapshot = await invoke<NetworkCountersSnapshot[]>(
+          "get_network_interfaces",
+        );
         if (active) {
           const sampleTime = performance.now();
           const nextCounters: typeof previousNetworkCounters.current = {};
@@ -804,12 +1073,17 @@ function App() {
               : 0;
             const measured: NetworkInterfaceSnapshot = {
               ...network,
-              downloadBytesPerSecond: previous && network.receivedBytes >= previous.receivedBytes
-                ? (network.receivedBytes - previous.receivedBytes) / elapsedSeconds
-                : 0,
-              uploadBytesPerSecond: previous && network.transmittedBytes >= previous.transmittedBytes
-                ? (network.transmittedBytes - previous.transmittedBytes) / elapsedSeconds
-                : 0,
+              downloadBytesPerSecond:
+                previous && network.receivedBytes >= previous.receivedBytes
+                  ? (network.receivedBytes - previous.receivedBytes) /
+                    elapsedSeconds
+                  : 0,
+              uploadBytesPerSecond:
+                previous &&
+                network.transmittedBytes >= previous.transmittedBytes
+                  ? (network.transmittedBytes - previous.transmittedBytes) /
+                    elapsedSeconds
+                  : 0,
             };
             nextCounters[network.name] = {
               receivedBytes: network.receivedBytes,
@@ -830,11 +1104,13 @@ function App() {
       } finally {
         if (active) {
           setNetworkLoading(false);
-          timeoutId = window.setTimeout(() => void refreshNetworkInterfaces(), 1000);
+          timeoutId = window.setTimeout(
+            () => void refreshNetworkInterfaces(),
+            1000,
+          );
         }
       }
     }
-
     void refreshNetworkInterfaces();
     return () => {
       active = false;
@@ -859,12 +1135,35 @@ function App() {
       .finally(() => {
         if (active) setNetworkRouteLoading(false);
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [page, networkRouteRefreshKey]);
 
   useEffect(() => {
-    if (page !== "logs") return;
+    if (page !== "connections") return;
+    let active = true;
+    setConnectionsLoading(true);
+    invoke<NetworkConnectionSnapshot[]>("get_network_connections")
+      .then((snapshot) => {
+        if (active) {
+          setConnections(snapshot);
+          setConnectionsError(null);
+        }
+      })
+      .catch((error) => {
+        if (active) setConnectionsError(String(error));
+      })
+      .finally(() => {
+        if (active) setConnectionsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [page]);
 
+  useEffect(() => {
+    if (page !== "logs") return;
     let active = true;
     setSystemLogsLoading(true);
     invoke<SystemLogEntry[]>("get_recent_logs")
@@ -880,36 +1179,56 @@ function App() {
       .finally(() => {
         if (active) setSystemLogsLoading(false);
       });
-
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [page, systemLogsRefreshKey]);
 
   useEffect(() => {
     if (page !== "processes") return;
-
     let active = true;
     let timeoutId = 0;
     previousProcessIoCounters.current = {};
     setProcessLoading(true);
-
     async function refreshProcesses() {
       try {
         const rawSnapshot = await invoke<RawProcessSnapshot[]>("get_processes");
         if (active) {
           const sampleTime = performance.now();
-          const nextCounters: Record<string, { read: number; write: number; time: number }> = {};
+          const nextCounters: Record<
+            string,
+            { read: number; write: number; time: number }
+          > = {};
           const snapshot: ProcessSnapshot[] = rawSnapshot.map((process) => {
             const key = `${process.pid}:${process.startTime}`;
             const previous = previousProcessIoCounters.current[key];
-            const elapsedSeconds = previous ? Math.max((sampleTime - previous.time) / 1000, 0.001) : 0;
-            const diskReadBytesPerSecond = previous && process.diskReadTotalBytes >= previous.read
-              ? Math.round((process.diskReadTotalBytes - previous.read) / elapsedSeconds)
-              : null;
-            const diskWriteBytesPerSecond = previous && process.diskWriteTotalBytes >= previous.write
-              ? Math.round((process.diskWriteTotalBytes - previous.write) / elapsedSeconds)
-              : null;
-            nextCounters[key] = { read: process.diskReadTotalBytes, write: process.diskWriteTotalBytes, time: sampleTime };
-            return { ...process, diskReadBytesPerSecond, diskWriteBytesPerSecond };
+            const elapsedSeconds = previous
+              ? Math.max((sampleTime - previous.time) / 1000, 0.001)
+              : 0;
+            const diskReadBytesPerSecond =
+              previous && process.diskReadTotalBytes >= previous.read
+                ? Math.round(
+                    (process.diskReadTotalBytes - previous.read) /
+                      elapsedSeconds,
+                  )
+                : null;
+            const diskWriteBytesPerSecond =
+              previous && process.diskWriteTotalBytes >= previous.write
+                ? Math.round(
+                    (process.diskWriteTotalBytes - previous.write) /
+                      elapsedSeconds,
+                  )
+                : null;
+            nextCounters[key] = {
+              read: process.diskReadTotalBytes,
+              write: process.diskWriteTotalBytes,
+              time: sampleTime,
+            };
+            return {
+              ...process,
+              diskReadBytesPerSecond,
+              diskWriteBytesPerSecond,
+            };
           });
           previousProcessIoCounters.current = nextCounters;
           setProcesses(snapshot);
@@ -924,7 +1243,6 @@ function App() {
         }
       }
     }
-
     void refreshProcesses();
     return () => {
       active = false;
@@ -932,14 +1250,16 @@ function App() {
     };
   }, [page]);
 
+  // --- Derived State ---
   const memoryPercent =
     telemetry && telemetry.memoryTotalBytes > 0
       ? Math.round(
           (telemetry.memoryUsedBytes / telemetry.memoryTotalBytes) * 100,
         )
       : 0;
-
-  const nonLoopbackInterfaces = networkInterfaces.filter((network) => !network.isLoopback);
+  const nonLoopbackInterfaces = networkInterfaces.filter(
+    (network) => !network.isLoopback,
+  );
   const totalDownloadRate = nonLoopbackInterfaces.reduce(
     (total, network) => total + network.downloadBytesPerSecond,
     0,
@@ -948,7 +1268,6 @@ function App() {
     (total, network) => total + network.uploadBytesPerSecond,
     0,
   );
-
   const hottestTemperature = temperatures.reduce<TemperatureSnapshot | null>(
     (hottest, sensor) =>
       !hottest || sensor.temperatureCelsius > hottest.temperatureCelsius
@@ -960,17 +1279,21 @@ function App() {
   const metrics = [
     {
       label: "Processor",
-      value: telemetry ? `${Math.round(telemetry.cpuUsagePercent)}%` : "—",
-      detail: telemetry ? "Current total CPU usage" : "Waiting for telemetry",
-      icon: "CPU",
+      value: telemetry
+        ? `${Math.round(telemetry.cpuUsagePercent)}%`
+        : "Unavailable",
+      detail: "Current total CPU usage",
+      page: "performance" as AppPage,
     },
     {
       label: "Memory",
-      value: telemetry ? `${formatGiB(telemetry.memoryUsedBytes)} GiB` : "—",
+      value: telemetry
+        ? `${formatGiB(telemetry.memoryUsedBytes)} GiB`
+        : "Unavailable",
       detail: telemetry
         ? `of ${formatGiB(telemetry.memoryTotalBytes)} GiB · ${memoryPercent}% used`
         : "Waiting for telemetry",
-      icon: "RAM",
+      page: "performance" as AppPage,
     },
     {
       label: "Temperature",
@@ -980,311 +1303,304 @@ function App() {
           : `${Math.round((hottestTemperature.temperatureCelsius * 9) / 5 + 32)}°F`
         : "Unavailable",
       detail: hottestTemperature
-        ? `${hottestTemperature.label || "System sensor"} · highest available reading`
-        : temperatureError
-          ? "Could not read hardware sensors"
-          : temperatureLoading
-            ? "Checking for sensors"
-            : "No readable temperature sensors",
-      icon: temperatureUnit === "celsius" ? "°C" : "°F",
+        ? hottestTemperature.label
+        : "No readable sensors",
+      page: "sensors" as AppPage,
     },
   ];
+  if (hardwareExtra && hardwareExtra.gpus.length > 0) {
+    const gpu = hardwareExtra.gpus[0];
+    metrics.push({
+      label: gpu.name,
+      value: `${Math.round(gpu.utilizationPercent)}%`,
+      detail: `${formatProcessMemory(gpu.vramUsedBytes)} / ${formatProcessMemory(gpu.vramTotalBytes)} VRAM`,
+      page: "performance" as AppPage,
+    });
+  }
 
   const visibleHistory = history.slice(-historyWindow);
-  const cpuPoints = visibleHistory
-    .map((sample, index) => {
-      const x = visibleHistory.length > 1 ? (index / (visibleHistory.length - 1)) * 1000 : 1000;
-      const y = 190 - (sample.cpuPercent / 100) * 180;
-      return `${x},${y}`;
-    })
-    .join(" ");
-  const memoryPoints = visibleHistory
-    .map((sample, index) => {
-      const x = visibleHistory.length > 1 ? (index / (visibleHistory.length - 1)) * 1000 : 1000;
-      const y = 190 - (sample.memoryPercent / 100) * 180;
-      return `${x},${y}`;
-    })
-    .join(" ");
-  const latestSample = visibleHistory[visibleHistory.length - 1];
-  const historyRangeLabel =
-    historyWindow === 300 ? "5 minutes" : historyWindow === 900 ? "15 minutes" : "30 minutes";
-  const sampleProgress = Math.min(history.length, historyWindow);
+  const chartWidth = 800;
+  const chartHeight = 200;
+  const cpuData = visibleHistory.map((sample, index) => ({
+    x: (index / (visibleHistory.length - 1 || 1)) * chartWidth,
+    y: chartHeight - (sample.cpuPercent / 100) * chartHeight,
+  }));
+  const memData = visibleHistory.map((sample, index) => ({
+    x: (index / (visibleHistory.length - 1 || 1)) * chartWidth,
+    y: chartHeight - (sample.memoryPercent / 100) * chartHeight,
+  }));
+  const cpuPath = buildSmoothPath(cpuData);
+  const memPath = buildSmoothPath(memData);
+  const cpuAreaPath =
+    cpuData.length > 0
+      ? `${cpuPath} L ${chartWidth},${chartHeight} L 0,${chartHeight} Z`
+      : "";
+  const memAreaPath =
+    memData.length > 0
+      ? `${memPath} L ${chartWidth},${chartHeight} L 0,${chartHeight} Z`
+      : "";
 
+  // --- Sorting / Filtering ---
   const filteredDrives = drives
-    .filter((drive) => {
-      const query = driveQuery.trim().toLocaleLowerCase();
-      return (
-        !query ||
-        drive.name.toLocaleLowerCase().includes(query) ||
-        drive.mountPoint.toLocaleLowerCase().includes(query) ||
-        drive.fileSystem.toLocaleLowerCase().includes(query)
-      );
-    })
+    .filter((d) =>
+      d.mountPoint.toLowerCase().includes(driveQuery.toLowerCase()),
+    )
     .sort((a, b) => a.mountPoint.localeCompare(b.mountPoint));
-
-  const filteredServices = services.filter((service) => {
-    const query = serviceQuery.trim().toLocaleLowerCase();
-    const matchesQuery = !query ||
-      service.unit.toLocaleLowerCase().includes(query) ||
-      service.description.toLocaleLowerCase().includes(query) ||
-      service.scope.toLocaleLowerCase().includes(query);
-    const matchesFilter = serviceFilter === "all" ||
-      (serviceFilter === "active" && service.activeState === "active") ||
-      (serviceFilter === "failed" && service.activeState === "failed") ||
-      (serviceFilter === "enabled" && service.startupState.startsWith("enabled"));
+  const filteredServices = services.filter((s) => {
+    const matchesQuery =
+      s.unit.toLowerCase().includes(serviceQuery.toLowerCase()) ||
+      s.description.toLowerCase().includes(serviceQuery.toLowerCase());
+    const matchesFilter =
+      serviceFilter === "all" ||
+      (serviceFilter === "active" && s.activeState === "active") ||
+      (serviceFilter === "failed" && s.activeState === "failed") ||
+      (serviceFilter === "enabled" && s.startupState.startsWith("enabled"));
     return matchesQuery && matchesFilter;
   });
   const visibleServices = filteredServices.slice(0, serviceVisibleCount);
-
-  const filteredStartupApps = startupApps.filter((startupApp) => {
-    const query = startupQuery.trim().toLocaleLowerCase();
-    return (
-      !query ||
-      startupApp.name.toLocaleLowerCase().includes(query) ||
-      startupApp.command.toLocaleLowerCase().includes(query) ||
-      startupApp.source.toLocaleLowerCase().includes(query)
-    );
+  const filteredPackages = (packageInventory?.packages || []).filter((p) => {
+    const matchesQuery =
+      p.name.toLowerCase().includes(packageQuery.toLowerCase()) ||
+      p.summary.toLowerCase().includes(packageQuery.toLowerCase());
+    const matchesFilter =
+      packageFilter === "all" ||
+      (packageFilter === "upgradable" && p.upgradeVersion !== null) ||
+      (packageFilter === "automatic" && p.automatic);
+    const matchesSource =
+      packageSourceFilter === "all" || p.source === packageSourceFilter;
+    return matchesQuery && matchesFilter && matchesSource;
   });
-
-  const filteredPartitions = partitions.filter((partition) => {
-    const query = driveQuery.trim().toLocaleLowerCase();
-    return (
-      !query ||
-      partition.name.toLocaleLowerCase().includes(query) ||
-      partition.path.toLocaleLowerCase().includes(query) ||
-      (partition.label ?? "").toLocaleLowerCase().includes(query) ||
-      (partition.fileSystem ?? "").toLocaleLowerCase().includes(query)
-    );
-  });
-
-  const filteredSystemLogs = systemLogs.filter((entry) => {
-    const query = systemLogsQuery.trim().toLocaleLowerCase();
-    const rangeHours = systemLogsTimeRange === "1h" ? 1 : systemLogsTimeRange === "6h" ? 6 : systemLogsTimeRange === "24h" ? 24 : null;
-    const inTimeRange = rangeHours === null || (entry.timestampMicros > 0 && entry.timestampMicros >= Date.now() * 1000 - rangeHours * 60 * 60 * 1_000_000);
-    const matchesQuery = !query || entry.message.toLocaleLowerCase().includes(query) || entry.source.toLocaleLowerCase().includes(query);
-    const priority = ["Emergency", "Alert", "Critical", "Error"].includes(entry.severity)
+  const visiblePackages = filteredPackages.slice(0, packageVisibleCount);
+  const filteredStartupApps = startupApps.filter(
+    (s) =>
+      s.name.toLowerCase().includes(startupQuery.toLowerCase()) ||
+      s.command.toLowerCase().includes(startupQuery.toLowerCase()),
+  );
+  const filteredConnections = connections.filter(
+    (c) =>
+      c.localAddress.toLowerCase().includes(connectionsQuery.toLowerCase()) ||
+      c.process.toLowerCase().includes(connectionsQuery.toLowerCase()),
+  );
+  const filteredPartitions = partitions.filter(
+    (p) =>
+      p.name.toLowerCase().includes(driveQuery.toLowerCase()) ||
+      p.path.toLowerCase().includes(driveQuery.toLowerCase()),
+  );
+  const filteredSystemLogs = systemLogs.filter((e) => {
+    const rangeHours =
+      systemLogsTimeRange === "1h"
+        ? 1
+        : systemLogsTimeRange === "6h"
+          ? 6
+          : systemLogsTimeRange === "24h"
+            ? 24
+            : null;
+    const inTimeRange =
+      rangeHours === null ||
+      (e.timestampMicros > 0 &&
+        e.timestampMicros >=
+          Date.now() * 1000 - rangeHours * 60 * 60 * 1_000_000);
+    const matchesQuery =
+      e.message.toLowerCase().includes(systemLogsQuery.toLowerCase()) ||
+      e.source.toLowerCase().includes(systemLogsQuery.toLowerCase());
+    const priority = ["Emergency", "Alert", "Critical", "Error"].includes(
+      e.severity,
+    )
       ? "errors"
-      : entry.severity === "Warning"
+      : e.severity === "Warning"
         ? "warnings"
-        : entry.severity === "Debug"
+        : e.severity === "Debug"
           ? "debug"
           : "info";
-    return inTimeRange && matchesQuery && (systemLogsSeverity === "all" || priority === systemLogsSeverity);
+    return (
+      inTimeRange &&
+      matchesQuery &&
+      (systemLogsSeverity === "all" || priority === systemLogsSeverity)
+    );
   });
-
   const filteredProcesses = processes
-    .filter((process) => {
-      const query = processQuery.trim().toLocaleLowerCase();
+    .filter((p) => {
       const matchesSearch =
-        !query ||
-        process.name.toLocaleLowerCase().includes(query) ||
-        String(process.pid).includes(query);
-      const status = process.status.toLocaleLowerCase();
+        p.name.toLowerCase().includes(processQuery.toLowerCase()) ||
+        String(p.pid).includes(processQuery);
+      const status = p.status.toLowerCase();
       const matchesState =
         processStateFilter === "all" ||
         (processStateFilter === "running" && status === "run") ||
-        (processStateFilter === "sleeping" && (status === "sleep" || status === "idle")) ||
+        (processStateFilter === "sleeping" &&
+          (status === "sleep" || status === "idle")) ||
         (processStateFilter === "stopped" && status === "stop") ||
         (processStateFilter === "zombie" && status === "zombie");
       return matchesSearch && matchesState;
     })
     .sort((a, b) => {
-      let comparison = 0;
-      switch (processSort.key) {
-        case "name":
-          comparison = a.name.localeCompare(b.name);
-          break;
-        case "pid":
-          comparison = a.pid - b.pid;
-          break;
-        case "cpu":
-          comparison = a.cpuUsagePercent - b.cpuUsagePercent;
-          break;
-        case "memory":
-          comparison = a.memoryBytes - b.memoryBytes;
-          break;
-        case "read":
-          comparison = (a.diskReadBytesPerSecond ?? -1) - (b.diskReadBytesPerSecond ?? -1);
-          break;
-        case "write":
-          comparison = (a.diskWriteBytesPerSecond ?? -1) - (b.diskWriteBytesPerSecond ?? -1);
-          break;
-      }
-      return processSort.direction === "asc" ? comparison : -comparison;
+      let cmp = 0;
+      if (processSort.key === "name") cmp = a.name.localeCompare(b.name);
+      else if (processSort.key === "pid") cmp = a.pid - b.pid;
+      else if (processSort.key === "cpu")
+        cmp = a.cpuUsagePercent - b.cpuUsagePercent;
+      else if (processSort.key === "memory")
+        cmp = a.memoryBytes - b.memoryBytes;
+      else if (processSort.key === "read")
+        cmp =
+          (a.diskReadBytesPerSecond ?? -1) - (b.diskReadBytesPerSecond ?? -1);
+      else if (processSort.key === "write")
+        cmp =
+          (a.diskWriteBytesPerSecond ?? -1) - (b.diskWriteBytesPerSecond ?? -1);
+      return processSort.direction === "asc" ? cmp : -cmp;
     });
 
   const processTreeRows: ProcessTreeRow[] = [];
   if (processViewMode === "list") {
-    filteredProcesses.forEach((process) => processTreeRows.push({ process, depth: 0, childCount: 0 }));
+    filteredProcesses.forEach((p) =>
+      processTreeRows.push({ process: p, depth: 0, childCount: 0 }),
+    );
   } else {
-    const processByPid = new Map(filteredProcesses.map((process) => [process.pid, process]));
+    const processByPid = new Map(filteredProcesses.map((p) => [p.pid, p]));
     const childrenByParent = new Map<number, ProcessSnapshot[]>();
     const roots: ProcessSnapshot[] = [];
-    for (const process of filteredProcesses) {
-      const parent = process.parentPid === null ? undefined : processByPid.get(process.parentPid);
-      if (parent && parent.pid !== process.pid) {
+    for (const p of filteredProcesses) {
+      const parent =
+        p.parentPid === null ? undefined : processByPid.get(p.parentPid);
+      if (parent && parent.pid !== p.pid) {
         const children = childrenByParent.get(parent.pid) ?? [];
-        children.push(process);
+        children.push(p);
         childrenByParent.set(parent.pid, children);
-      } else {
-        roots.push(process);
-      }
+      } else roots.push(p);
     }
     const visited = new Set<number>();
     const hiddenByCollapse = new Set<number>();
-    const markDescendantsHidden = (process: ProcessSnapshot) => {
-      for (const child of childrenByParent.get(process.pid) ?? []) {
+    const markDescendantsHidden = (p: ProcessSnapshot) => {
+      for (const child of childrenByParent.get(p.pid) ?? []) {
         if (hiddenByCollapse.has(child.pid)) continue;
         hiddenByCollapse.add(child.pid);
         markDescendantsHidden(child);
       }
     };
-    const appendProcess = (process: ProcessSnapshot, depth: number) => {
-      if (visited.has(process.pid)) return;
-      visited.add(process.pid);
-      const children = childrenByParent.get(process.pid) ?? [];
-      processTreeRows.push({ process, depth, childCount: children.length });
-      if (collapsedProcessPids.includes(process.pid)) {
-        markDescendantsHidden(process);
-      } else {
-        children.forEach((child) => appendProcess(child, depth + 1));
-      }
+    const appendProcess = (p: ProcessSnapshot, depth: number) => {
+      if (visited.has(p.pid)) return;
+      visited.add(p.pid);
+      const children = childrenByParent.get(p.pid) ?? [];
+      processTreeRows.push({ process: p, depth, childCount: children.length });
+      if (collapsedProcessPids.includes(p.pid)) markDescendantsHidden(p);
+      else children.forEach((c) => appendProcess(c, depth + 1));
     };
-    roots.forEach((process) => appendProcess(process, 0));
-    filteredProcesses.forEach((process) => {
-      if (!visited.has(process.pid) && !hiddenByCollapse.has(process.pid)) appendProcess(process, 0);
+    roots.forEach((p) => appendProcess(p, 0));
+    filteredProcesses.forEach((p) => {
+      if (!visited.has(p.pid) && !hiddenByCollapse.has(p.pid))
+        appendProcess(p, 0);
     });
   }
 
-  function toggleProcessCollapsed(pid: number) {
-    setCollapsedProcessPids((current) =>
-      current.includes(pid) ? current.filter((value) => value !== pid) : [...current, pid],
-    );
-  }
-
-  function sortProcesses(key: ProcessSortKey) {
-    setProcessSort((current) => ({
-      key,
-      direction:
-        current.key === key && current.direction === "desc" ? "asc" : "desc",
-    }));
-  }
-
+  // --- Actions ---
   function recordOperation(details: OperationDetails) {
     setOperationHistory(appendOperationHistory(details));
   }
-
   function clearOperationHistory() {
-    if (!window.confirm("Clear Kestrel’s local operation history? This removes the recorded entries from this device and does not undo those actions.")) return;
-    try {
-      localStorage.removeItem(OPERATION_HISTORY_KEY);
-    } catch {
-      // Clearing the visible session history is still useful if storage is unavailable.
+    if (window.confirm("Clear Argus’s local operation history?")) {
+      try {
+        localStorage.removeItem(OPERATION_HISTORY_KEY);
+      } catch {}
+      setOperationHistory([]);
     }
-    setOperationHistory([]);
   }
 
-  async function requestPartitionMount(partition: PartitionSnapshot, mount: boolean) {
+  async function requestPartitionMount(
+    partition: PartitionSnapshot,
+    mount: boolean,
+  ) {
     if (partition.deviceType !== "part" || partitionActionPath) return;
-    if (!mount) {
-      const mountPoints = partition.mountPoints.filter((point) => point !== "[SWAP]");
-      const confirmed = window.confirm(
-        `Unmount ${partition.path}?\n\nFiles and apps using ${mountPoints.join(", ") || "this volume"} may become unavailable. Kestrel will use Linux’s normal unmount process and will not force it.`,
-      );
-      if (!confirmed) return;
-    }
-
+    if (
+      !mount &&
+      !window.confirm(
+        `Unmount ${partition.path}? Files and apps using it may become unavailable.`,
+      )
+    )
+      return;
     setPartitionActionPath(partition.path);
     setPartitionActionStatus(null);
     try {
-      const result = await invoke<string>("set_partition_mounted", { path: partition.path, mount });
+      const result = await invoke<string>("set_partition_mounted", {
+        path: partition.path,
+        mount,
+      });
       setPartitionActionStatus({
         kind: "success",
-        message: result || `${partition.path} ${mount ? "mounted" : "unmounted"} successfully.`,
+        message:
+          result ||
+          `${partition.path} ${mount ? "mounted" : "unmounted"} successfully.`,
       });
-      recordOperation({ category: "Storage", action: mount ? "Mount volume" : "Unmount volume", target: partition.path, outcome: "success", note: "Linux completed the requested volume action." });
-      setPartitionRefreshKey((current) => current + 1);
+      recordOperation({
+        category: "Storage",
+        action: mount ? "Mount volume" : "Unmount volume",
+        target: partition.path,
+        outcome: "success",
+        note: "Linux completed the requested volume action.",
+      });
+      setPartitionRefreshKey((k) => k + 1);
     } catch (error) {
       setPartitionActionStatus({ kind: "error", message: String(error) });
-      recordOperation({ category: "Storage", action: mount ? "Mount volume" : "Unmount volume", target: partition.path, outcome: "failed", note: "Kestrel could not complete the requested volume action." });
+      recordOperation({
+        category: "Storage",
+        action: mount ? "Mount volume" : "Unmount volume",
+        target: partition.path,
+        outcome: "failed",
+        note: "Argus could not complete the requested volume action.",
+      });
     } finally {
       setPartitionActionPath(null);
     }
   }
-
-  async function requestStartupToggle(startupApp: StartupAppSnapshot) {
-    if ((!startupApp.isSystemEntry && startupApp.source !== "User") || !startupApp.command.trim()) return;
-    const enabled = !startupApp.enabled;
-    const action = enabled ? "enable" : "disable";
-    const scopeNotice = startupApp.isSystemEntry
-      ? "Kestrel will create or update an override in your account’s autostart folder. The shared system entry will not be edited."
-      : "This changes only your account’s startup entry.";
-    const confirmed = window.confirm(
-      `${enabled ? "Enable" : "Disable"} ${startupApp.name} at sign-in?\n\n${scopeNotice} It takes effect the next time you sign in and will not start or close the app now.`,
-    );
-    if (!confirmed) return;
-
-    setStartupActionId(startupApp.id);
+  async function requestStartupToggle(app: StartupAppSnapshot) {
+    if (!app.command.trim()) return;
+    const enabled = !app.enabled;
+    if (
+      !window.confirm(
+        `${enabled ? "Enable" : "Disable"} ${app.name} at sign-in?`,
+      )
+    )
+      return;
+    setStartupActionId(app.id);
     setStartupActionStatus(null);
     try {
       const updated = await invoke<StartupAppSnapshot>("set_startup_enabled", {
-        id: startupApp.id,
+        id: app.id,
         enabled,
-        expectedEnabled: startupApp.enabled,
-        isSystemEntry: startupApp.isSystemEntry,
+        expectedEnabled: app.enabled,
+        isSystemEntry: app.isSystemEntry,
       });
-      setStartupApps((current) => current.map((entry) => entry.id === updated.id ? updated : entry));
+      setStartupApps((current) =>
+        current.map((e) => (e.id === updated.id ? updated : e)),
+      );
       setStartupActionStatus({
         kind: "success",
-        message: startupApp.isSystemEntry
-          ? `${startupApp.name} is ${enabled ? "enabled" : "disabled"} for your next sign-in.`
-          : `${startupApp.name} will ${action} at your next sign-in.`,
+        message: `${app.name} will ${enabled ? "enable" : "disable"} at your next sign-in.`,
       });
-      recordOperation({ category: "Startup", action: `${enabled ? "Enable" : "Disable"} at sign-in`, target: startupApp.name, outcome: "success", note: startupApp.isSystemEntry ? "Changed a per-user override; the shared system file was not edited." : "Changed this account’s startup entry." });
+      recordOperation({
+        category: "Startup",
+        action: `${enabled ? "Enable" : "Disable"} at sign-in`,
+        target: app.name,
+        outcome: "success",
+        note: "Changed this account’s startup entry.",
+      });
     } catch (error) {
       setStartupActionStatus({
         kind: "error",
-        message: `Could not ${action} ${startupApp.name}: ${String(error)}`,
+        message: `Could not update ${app.name}: ${String(error)}`,
       });
-      recordOperation({ category: "Startup", action: `${enabled ? "Enable" : "Disable"} at sign-in`, target: startupApp.name, outcome: "failed", note: "Kestrel could not update the startup entry." });
+      recordOperation({
+        category: "Startup",
+        action: `${enabled ? "Enable" : "Disable"} at sign-in`,
+        target: app.name,
+        outcome: "failed",
+        note: "Argus could not update the startup entry.",
+      });
     } finally {
       setStartupActionId(null);
     }
   }
-
-  async function retryProcessSignalWithAuthorization(process: ProcessSnapshot, signal: "term" | "kill") {
-    const name = process.name || "Unnamed process";
-    const action = signal === "term" ? "End" : "Force stop";
-    const consequence = signal === "kill"
-      ? "This sends an immediate kill signal and may lose unsaved data."
-      : "This requests normal termination and may close the selected process.";
-    const confirmed = window.confirm(
-      `Retry ${action.toLowerCase()} for ${name} (PID ${process.pid}) with administrator authorization?\n\nLinux refused the normal request. Kestrel will request a Polkit authorization dialog and recheck the PID, process name, and start time before sending the signal. ${consequence}`,
-    );
-    if (!confirmed) return;
-
-    try {
-      await invoke("signal_process_with_authorization", {
-        pid: process.pid,
-        expectedName: process.name,
-        expectedStartTime: process.startTime,
-        signal,
-      });
-      setProcessActionStatus({ kind: "success", message: `Administrator-authorized ${action.toLowerCase()} signal sent to ${name} (PID ${process.pid}).` });
-      recordOperation({ category: "Process", action: `${action} process with authorization`, target: `${name} (PID ${process.pid})`, outcome: "success", note: signal === "kill" ? "An administrator-authorized immediate kill signal was sent; unsaved work may be lost." : "An administrator-authorized normal termination signal was sent." });
-    } catch (error) {
-      setProcessActionStatus({ kind: "error", message: `Administrator-authorized ${action.toLowerCase()} failed for ${name} (PID ${process.pid}): ${String(error)}` });
-      recordOperation({ category: "Process", action: `${action} process with authorization`, target: `${name} (PID ${process.pid})`, outcome: "failed", note: "The authorization request was cancelled, denied, unavailable, or the process changed." });
-    }
-  }
-
   async function requestProcessEnd(process: ProcessSnapshot) {
-    const name = process.name || "Unnamed process";
-    const confirmed = window.confirm(
-      `End ${name} (PID ${process.pid})?\n\nKestrel will request normal termination. Unsaved work in this process may be lost.`,
-    );
-    if (!confirmed) return;
-
+    if (!window.confirm(`End ${process.name} (PID ${process.pid})?`)) return;
     setTerminatingPid(process.pid);
     setProcessActionStatus(null);
     try {
@@ -1295,31 +1611,59 @@ function App() {
       });
       setProcessActionStatus({
         kind: "success",
-        message: `Termination requested for ${name} (PID ${process.pid}). It may take a moment to exit.`,
+        message: `Termination requested for ${process.name}.`,
       });
-      recordOperation({ category: "Process", action: "End process", target: `${name} (PID ${process.pid})`, outcome: "success", note: "A normal termination signal was sent." });
+      recordOperation({
+        category: "Process",
+        action: "End process",
+        target: `${process.name} (PID ${process.pid})`,
+        outcome: "success",
+        note: "A normal termination signal was sent.",
+      });
     } catch (error) {
       setProcessActionStatus({
         kind: "error",
-        message: `Could not end ${name} (PID ${process.pid}): ${String(error)}`,
+        message: `Could not end ${process.name}: ${String(error)}`,
       });
-      recordOperation({ category: "Process", action: "End process", target: `${name} (PID ${process.pid})`, outcome: "failed", note: "Linux did not complete the non-administrator termination request." });
+      recordOperation({
+        category: "Process",
+        action: "End process",
+        target: `${process.name} (PID ${process.pid})`,
+        outcome: "failed",
+        note: "Linux did not complete the non-administrator termination request.",
+      });
       if (String(error).includes("higher privileges")) {
-        await retryProcessSignalWithAuthorization(process, "term");
+        if (window.confirm(`Retry with administrator authorization?`)) {
+          try {
+            await invoke("signal_process_with_authorization", {
+              pid: process.pid,
+              expectedName: process.name,
+              expectedStartTime: process.startTime,
+              signal: "term",
+            });
+            setProcessActionStatus({
+              kind: "success",
+              message: `Administrator-authorized termination signal sent.`,
+            });
+          } catch (e) {
+            setProcessActionStatus({
+              kind: "error",
+              message: `Authorization failed: ${String(e)}`,
+            });
+          }
+        }
       }
     } finally {
       setTerminatingPid(null);
     }
   }
-
   async function requestProcessForceStop(process: ProcessSnapshot) {
-    if (terminatingPid !== null) return;
-    const name = process.name || "Unnamed process";
-    const confirmed = window.confirm(
-      `Force stop ${name} (PID ${process.pid})?\n\nThis sends an immediate kill signal. The app cannot save work or clean up, and unsaved data may be lost. Use this only if normal End did not work.`,
-    );
-    if (!confirmed) return;
-
+    if (
+      !window.confirm(
+        `Force stop ${process.name} (PID ${process.pid})? Unsaved data may be lost.`,
+      )
+    )
+      return;
     setTerminatingPid(process.pid);
     setProcessActionStatus(null);
     try {
@@ -1328,1988 +1672,1925 @@ function App() {
         expectedName: process.name,
         expectedStartTime: process.startTime,
       });
-      setProcessActionStatus({ kind: "success", message: `Force-stop signal sent to ${name} (PID ${process.pid}).` });
-      recordOperation({ category: "Process", action: "Force stop process", target: `${name} (PID ${process.pid})`, outcome: "success", note: "An immediate kill signal was sent; unsaved work may be lost." });
+      setProcessActionStatus({
+        kind: "success",
+        message: `Force-stop signal sent to ${process.name}.`,
+      });
+      recordOperation({
+        category: "Process",
+        action: "Force stop process",
+        target: `${process.name} (PID ${process.pid})`,
+        outcome: "success",
+        note: "An immediate kill signal was sent.",
+      });
     } catch (error) {
-      setProcessActionStatus({ kind: "error", message: `Could not force stop ${name} (PID ${process.pid}): ${String(error)}` });
-      recordOperation({ category: "Process", action: "Force stop process", target: `${name} (PID ${process.pid})`, outcome: "failed", note: "Linux did not complete the non-administrator force-stop request." });
+      setProcessActionStatus({
+        kind: "error",
+        message: `Could not force stop ${process.name}: ${String(error)}`,
+      });
+      recordOperation({
+        category: "Process",
+        action: "Force stop process",
+        target: `${process.name} (PID ${process.pid})`,
+        outcome: "failed",
+        note: "Linux did not complete the non-administrator force-stop request.",
+      });
       if (String(error).includes("higher privileges")) {
-        await retryProcessSignalWithAuthorization(process, "kill");
+        if (window.confirm(`Retry with administrator authorization?`)) {
+          try {
+            await invoke("signal_process_with_authorization", {
+              pid: process.pid,
+              expectedName: process.name,
+              expectedStartTime: process.startTime,
+              signal: "kill",
+            });
+            setProcessActionStatus({
+              kind: "success",
+              message: `Administrator-authorized kill signal sent.`,
+            });
+          } catch (e) {
+            setProcessActionStatus({
+              kind: "error",
+              message: `Authorization failed: ${String(e)}`,
+            });
+          }
+        }
       }
     } finally {
       setTerminatingPid(null);
     }
   }
-
-  async function requestServiceAction(service: ServiceSnapshot, action: "start" | "stop" | "enable" | "disable") {
+  async function requestServiceAction(
+    service: ServiceSnapshot,
+    action: "start" | "stop" | "enable" | "disable",
+  ) {
     if (serviceActionUnit !== null) return;
-    const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
-    const detail = serviceActionImpact(service, action);
+    if (
+      !window.confirm(
+        `${action.charAt(0).toUpperCase() + action.slice(1)} ${service.unit}?`,
+      )
+    )
+      return;
     setServiceActionUnit(service.unit);
-    setServiceActionPhase("preview");
     setServiceActionStatus(null);
     try {
-      let relationshipText = "";
-      try {
-        const preview = await invoke<ServiceActionPreview>("get_service_action_preview", {
-          scope: service.scope,
-          unit: service.unit,
-          action,
-        });
-        const listedUnits = preview.relatedUnits.length > 0
-          ? preview.relatedUnits.join("\n  • ")
-          : "No additional related units were listed.";
-        const remaining = preview.truncated ? `\n  • …and ${preview.totalUnits - preview.relatedUnits.length} more` : "";
-        relationshipText = `\n\n${preview.relationship} (${preview.totalUnits} reported):\n  • ${listedUnits}${remaining}\n\n${preview.note}`;
-      } catch (error) {
-        relationshipText = `\n\nKestrel could not inspect service relationships: ${String(error)}. You can still continue, but the possible related-unit list is unavailable.`;
-      }
-
-      if (!window.confirm(`${actionLabel} ${service.scope === "System" ? "system" : "user"} service ${service.unit}?\n\n${detail}${relationshipText}\n\nContinue only if you understand this effect.`)) return;
-
-      setServiceActionPhase("action");
-      await invoke("set_service_state", { scope: service.scope, unit: service.unit, action });
-      setServiceActionStatus({ kind: "success", message: `${service.unit}: ${actionLabel.toLowerCase()} request completed.` });
-      recordOperation({ category: "Service", action: `${actionLabel} service`, target: `${service.scope} · ${service.unit}`, outcome: "success", note: "The service manager completed the request." });
-      setServiceRefreshKey((key) => key + 1);
+      await invoke("set_service_state", {
+        scope: service.scope,
+        unit: service.unit,
+        action,
+      });
+      setServiceActionStatus({
+        kind: "success",
+        message: `${service.unit}: ${action} request completed.`,
+      });
+      recordOperation({
+        category: "Service",
+        action: `${action} service`,
+        target: service.unit,
+        outcome: "success",
+        note: "The service manager completed the request.",
+      });
+      setServiceRefreshKey((k) => k + 1);
     } catch (error) {
-      setServiceActionStatus({ kind: "error", message: `Could not ${action} ${service.unit}: ${String(error)}` });
-      recordOperation({ category: "Service", action: `${actionLabel} service`, target: `${service.scope} · ${service.unit}`, outcome: "failed", note: "The service manager did not complete the request." });
+      setServiceActionStatus({
+        kind: "error",
+        message: `Could not ${action} ${service.unit}: ${String(error)}`,
+      });
+      recordOperation({
+        category: "Service",
+        action: `${action} service`,
+        target: service.unit,
+        outcome: "failed",
+        note: "The service manager did not complete the request.",
+      });
     } finally {
       setServiceActionUnit(null);
     }
   }
-
   async function showServiceLogs(service: ServiceSnapshot) {
     setServiceLogTarget(service);
     setServiceLogs([]);
-    setServiceLogsError(null);
     setServiceLogsLoading(true);
     try {
-      const entries = await invoke<SystemLogEntry[]>("get_service_logs", { scope: service.scope, unit: service.unit });
-      setServiceLogs(entries);
-    } catch (error) {
-      setServiceLogsError(String(error));
+      setServiceLogs(
+        await invoke<SystemLogEntry[]>("get_service_logs", {
+          scope: service.scope,
+          unit: service.unit,
+        }),
+      );
+    } catch (e) {
+      setServiceLogsError(String(e));
     } finally {
       setServiceLogsLoading(false);
     }
   }
-
-  const statusText = telemetryError
-    ? "Telemetry unavailable"
-    : telemetry
-      ? "Telemetry active"
-      : "Preparing telemetry";
-
-  const statusClass =
-    telemetry && !telemetryError ? "status-dot" : "status-dot muted";
-
   async function buildDiagnosticsReport() {
     setDiagnosticsLoading(true);
-    setDiagnosticsStatus(null);
     try {
-      const snapshot = await invoke<DiagnosticsSnapshot>("get_diagnostics_snapshot");
-      const lines = [
-        "Kestrel diagnostics summary",
-        `Generated: ${new Date().toISOString()}`,
-        "",
-        "System",
-        `Operating system: ${snapshot.operatingSystem}`,
-        `Kernel: ${snapshot.kernelVersion ?? "Unavailable"}`,
-        `Architecture: ${snapshot.architecture}`,
-        `Processor: ${snapshot.processor ?? "Unavailable"}`,
-        `Logical processors: ${snapshot.logicalProcessors}`,
-        `Physical cores: ${snapshot.physicalCores ?? "Unavailable"}`,
-        `Desktop environment: ${snapshot.desktopEnvironment ?? "Unavailable"}`,
-        `Session type: ${snapshot.sessionType ?? "Unavailable"}`,
-        "",
-        "Current readings",
-        `CPU usage: ${snapshot.cpuUsagePercent.toFixed(1)}%`,
-        `Memory in use: ${formatBytes(snapshot.memoryUsedBytes)} of ${formatBytes(snapshot.memoryTotalBytes)}`,
-        `System uptime: ${formatUptime(snapshot.uptimeSeconds)}`,
-        "",
-        "Privacy: This report excludes the device name, account name, IP addresses, process names, and file paths.",
-      ].join("\n");
-      setDiagnosticsSnapshot(snapshot);
-      setDiagnosticsReport(lines);
-      setDiagnosticsStatus({ kind: "success", message: "Report ready to review. Nothing has been saved yet." });
-    } catch (error) {
-      setDiagnosticsStatus({ kind: "error", message: `Could not collect diagnostics: ${String(error)}` });
+      const snap = await invoke<DiagnosticsSnapshot>(
+        "get_diagnostics_snapshot",
+      );
+      setDiagnosticsSnapshot(snap);
+      setDiagnosticsReport(
+        `Argus Diagnostics\nGenerated: ${new Date().toISOString()}\n\nOS: ${snap.operatingSystem}\nKernel: ${snap.kernelVersion}\nArch: ${snap.architecture}\nProcessor: ${snap.processor}\nCores: ${snap.logicalProcessors}\nCPU Usage: ${snap.cpuUsagePercent.toFixed(1)}%\nMemory: ${formatBytes(snap.memoryUsedBytes)} / ${formatBytes(snap.memoryTotalBytes)}\nUptime: ${formatUptime(snap.uptimeSeconds)}`,
+      );
+      setDiagnosticsStatus({ kind: "success", message: "Report ready." });
+    } catch (e) {
+      setDiagnosticsStatus({ kind: "error", message: String(e) });
     } finally {
       setDiagnosticsLoading(false);
     }
   }
-
   async function saveDiagnosticsReport() {
     if (!diagnosticsReport) return;
-    setDiagnosticsSaving(true);
-    setDiagnosticsStatus(null);
     try {
       const path = await save({
-        title: "Save Kestrel diagnostics report",
-        defaultPath: "kestrel-diagnostics.txt",
-        filters: [{ name: "Text report", extensions: ["txt"] }],
+        title: "Save Report",
+        defaultPath: "argus-diagnostics.txt",
+        filters: [{ name: "Text", extensions: ["txt"] }],
       });
-      if (!path) {
-        setDiagnosticsStatus({ kind: "success", message: "Save cancelled. The report has not been written." });
-        return;
+      if (path) {
+        await invoke("save_text_file", { path, contents: diagnosticsReport });
+        setDiagnosticsStatus({ kind: "success", message: "Saved." });
       }
-      await invoke("save_text_file", { path, contents: diagnosticsReport });
-      setDiagnosticsStatus({ kind: "success", message: "Diagnostics report saved." });
-    } catch (error) {
-      setDiagnosticsStatus({ kind: "error", message: `Could not save the report: ${String(error)}` });
-    } finally {
-      setDiagnosticsSaving(false);
+    } catch (e) {
+      setDiagnosticsStatus({ kind: "error", message: String(e) });
     }
   }
-
-  async function exportSystemLogs() {
-    if (filteredSystemLogs.length === 0) return;
-    setSystemLogsExporting(true);
-    setSystemLogsStatus(null);
-    try {
-      const path = await save({
-        title: "Export filtered Kestrel system logs",
-        defaultPath: "kestrel-system-logs.txt",
-        filters: [{ name: "Text log", extensions: ["txt"] }],
-      });
-      if (!path) return;
-      const lines = [
-        "Kestrel recent system logs",
-        `Exported: ${new Date().toLocaleString()}`,
-        `Entries: ${filteredSystemLogs.length}`,
-        "",
-        ...filteredSystemLogs.map((entry) => {
-          const date = entry.timestampMicros ? new Date(entry.timestampMicros / 1000).toISOString() : "Time unavailable";
-          return `[${date}] [${entry.severity}] ${entry.source}: ${entry.message}`;
-        }),
-      ].join("\n");
-      await invoke("save_text_file", { path, contents: lines });
-      setSystemLogsStatus({ kind: "success", message: "Filtered log entries saved." });
-    } catch (error) {
-      setSystemLogsStatus({ kind: "error", message: `Could not export log entries: ${String(error)}` });
-    } finally {
-      setSystemLogsExporting(false);
-    }
-  }
-
   async function inspectLogSizes() {
     setLogLoading(true);
-    setLogError(null);
     try {
       setLogInventory(await invoke<LogInventorySnapshot>("get_log_inventory"));
-    } catch (error) {
-      setLogInventory(null);
-      setLogError(String(error));
+    } catch (e) {
+      setLogError(String(e));
     } finally {
       setLogLoading(false);
     }
   }
-
-  async function clearCacheEntry(entry: CacheEntrySnapshot) {
-    if (!entry.clearable || cacheActionName) return;
-    const confirmed = window.confirm(
-      `Clear the “${entry.name}” cache folder? This permanently removes its contents (${formatProcessMemory(entry.sizeBytes)} as measured). Close the related app first; it may need to rebuild its cache.`,
-    );
-    if (!confirmed) return;
-
-    setCacheActionName(entry.name);
-    setCacheActionStatus(null);
-    try {
-      await invoke("clear_cache_entry", { directoryName: entry.name });
-      setCacheActionStatus({ kind: "success", message: `Cleared the ${entry.name} cache folder.` });
-      recordOperation({ category: "Maintenance", action: "Clear application cache", target: entry.name, outcome: "success", note: "Cache contents were removed and can be rebuilt by the application." });
-      await inspectCacheSizes();
-    } catch (error) {
-      setCacheActionStatus({ kind: "error", message: `Could not clear ${entry.name}: ${String(error)}` });
-      recordOperation({ category: "Maintenance", action: "Clear application cache", target: entry.name, outcome: "failed", note: "Kestrel could not complete the cache cleanup." });
-    } finally {
-      setCacheActionName(null);
-    }
-  }
-
   async function inspectCacheSizes() {
     setCacheLoading(true);
-    setCacheError(null);
     try {
-      const inventory = await invoke<CacheInventorySnapshot>("get_cache_inventory");
-      setCacheInventory(inventory);
-    } catch (error) {
-      setCacheError(String(error));
-      setCacheInventory(null);
+      setCacheInventory(
+        await invoke<CacheInventorySnapshot>("get_cache_inventory"),
+      );
+    } catch (e) {
+      setCacheError(String(e));
     } finally {
       setCacheLoading(false);
     }
   }
-
+  async function clearCacheEntry(entry: CacheEntrySnapshot) {
+    if (!window.confirm(`Clear ${entry.name} cache?`)) return;
+    try {
+      await invoke("clear_cache_entry", { directoryName: entry.name });
+      await inspectCacheSizes();
+    } catch (e) {
+      setCacheError(String(e));
+    }
+  }
   async function chooseAndScanLargeFiles() {
-    setLargeFileError(null);
     try {
       const selected = await openDialog({
-        title: "Choose a folder to scan for large files",
+        title: "Select Folder",
         directory: true,
         multiple: false,
       });
-      if (typeof selected !== "string") return;
-      setLargeFileLoading(true);
-      setLargeFileScan(null);
-      const result = await invoke<LargeFileScanResult>("scan_large_files", {
-        root: selected,
-        minimumSizeBytes: largeFileMinimum,
-      });
-      setLargeFileScan(result);
-    } catch (error) {
-      setLargeFileError(String(error));
+      if (typeof selected === "string") {
+        setLargeFileLoading(true);
+        setLargeFileScan(
+          await invoke<LargeFileScanResult>("scan_large_files", {
+            root: selected,
+            minimumSizeBytes: largeFileMinimum,
+          }),
+        );
+      }
+    } catch (e) {
+      setLargeFileError(String(e));
     } finally {
       setLargeFileLoading(false);
     }
   }
 
-  return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">K</div>
-          <div>
-            <strong>Kestrel</strong>
-            <span>Workstation</span>
-          </div>
-        </div>
+  // --- Command Palette Data ---
+  const allCommands: CommandItem[] = [
+    {
+      id: "nav-overview",
+      label: "Go to Overview",
+      category: "Navigation",
+      icon: icons.overview,
+      action: () => setPage("overview"),
+    },
+    {
+      id: "nav-performance",
+      label: "Go to Performance",
+      category: "Navigation",
+      icon: icons.performance,
+      action: () => setPage("performance"),
+    },
+    {
+      id: "nav-processes",
+      label: "Go to Processes",
+      category: "Navigation",
+      icon: icons.processes,
+      action: () => setPage("processes"),
+    },
+    {
+      id: "nav-activity",
+      label: "Go to Activity",
+      category: "Navigation",
+      icon: icons.activity,
+      action: () => setPage("activity"),
+    },
+    {
+      id: "nav-storage",
+      label: "Go to Storage",
+      category: "Navigation",
+      icon: icons.storage,
+      action: () => setPage("storage"),
+    },
+    {
+      id: "nav-sensors",
+      label: "Go to Sensors",
+      category: "Navigation",
+      icon: icons.sensors,
+      action: () => setPage("sensors"),
+    },
+    {
+      id: "nav-system",
+      label: "Go to System",
+      category: "Navigation",
+      icon: icons.system,
+      action: () => setPage("system"),
+    },
+    {
+      id: "nav-network",
+      label: "Go to Network",
+      category: "Navigation",
+      icon: icons.network,
+      action: () => setPage("network"),
+    },
+    {
+      id: "nav-connections",
+      label: "Go to Connections",
+      category: "Navigation",
+      icon: icons.connections,
+      action: () => setPage("connections"),
+    },
+    {
+      id: "nav-startup",
+      label: "Go to Startup",
+      category: "Navigation",
+      icon: icons.startup,
+      action: () => setPage("startup"),
+    },
+    {
+      id: "nav-services",
+      label: "Go to Services",
+      category: "Navigation",
+      icon: icons.services,
+      action: () => setPage("services"),
+    },
+    {
+      id: "nav-software",
+      label: "Go to Software",
+      category: "Navigation",
+      icon: icons.software,
+      action: () => setPage("software"),
+    },
+    {
+      id: "nav-maintenance",
+      label: "Go to Maintenance",
+      category: "Navigation",
+      icon: icons.maintenance,
+      action: () => setPage("maintenance"),
+    },
+    {
+      id: "nav-diagnostics",
+      label: "Go to Diagnostics",
+      category: "Navigation",
+      icon: icons.diagnostics,
+      action: () => setPage("diagnostics"),
+    },
+    {
+      id: "nav-logs",
+      label: "Go to Recent Logs",
+      category: "Navigation",
+      icon: icons.logs,
+      action: () => setPage("logs"),
+    },
+    {
+      id: "nav-settings",
+      label: "Go to Settings",
+      category: "Navigation",
+      icon: icons.settings,
+      action: () => setPage("settings"),
+    },
+    {
+      id: "action-theme-dark",
+      label: "Switch to Dark Theme",
+      category: "Actions",
+      icon: icons.moon,
+      action: () => setMode("dark"),
+    },
+    {
+      id: "action-theme-light",
+      label: "Switch to Light Theme",
+      category: "Actions",
+      icon: icons.sun,
+      action: () => setMode("light"),
+    },
+    {
+      id: "action-scan",
+      label: "Run Quick Scan",
+      category: "Actions",
+      icon: icons.plus,
+      action: () => {
+        setPage("diagnostics");
+        void buildDiagnosticsReport();
+      },
+    },
+    {
+      id: "action-clean",
+      label: "Free up space",
+      category: "Actions",
+      icon: icons.plus,
+      action: () => setPage("maintenance"),
+    },
+  ];
 
-        <div className="nav-label">WORKSPACE</div>
-        <nav className="navigation" aria-label="Main navigation">
+  const filteredCommands = allCommands.filter(
+    (cmd) =>
+      cmd.label.toLowerCase().includes(paletteQuery.toLowerCase()) ||
+      cmd.category.toLowerCase().includes(paletteQuery.toLowerCase()),
+  );
+
+  // Reset selection if the query changes
+  useEffect(() => {
+    setSelectedCommandIndex(0);
+  }, [paletteQuery]);
+
+  const handlePaletteKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelectedCommandIndex((prev) => (prev + 1) % filteredCommands.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedCommandIndex(
+        (prev) =>
+          (prev - 1 + filteredCommands.length) % filteredCommands.length,
+      );
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (filteredCommands[selectedCommandIndex]) {
+        filteredCommands[selectedCommandIndex].action();
+        setIsPaletteOpen(false);
+      }
+    }
+  };
+
+  // --- UI Components ---
+  const renderSidebar = () => {
+    const groups = [
+      {
+        id: "Dashboard",
+        icon: icons.overview,
+        items: [{ id: "overview", label: "Overview" }],
+      },
+      {
+        id: "Monitor",
+        icon: icons.performance,
+        items: [
+          { id: "performance", label: "Performance" },
+          { id: "processes", label: "Processes" },
+          { id: "activity", label: "Activity" },
+        ],
+      },
+      {
+        id: "Hardware",
+        icon: icons.storage,
+        items: [
+          { id: "storage", label: "Storage" },
+          { id: "sensors", label: "Sensors" },
+          { id: "system", label: "System" },
+        ],
+      },
+      {
+        id: "Network",
+        icon: icons.network,
+        items: [
+          { id: "network", label: "Network" },
+          { id: "connections", label: "Connections" },
+        ],
+      },
+      {
+        id: "Manage",
+        icon: icons.startup,
+        items: [
+          { id: "startup", label: "Startup" },
+          { id: "services", label: "Services" },
+          { id: "software", label: "Software" },
+        ],
+      },
+      {
+        id: "Tools",
+        icon: icons.maintenance,
+        items: [
+          { id: "maintenance", label: "Maintenance" },
+          { id: "diagnostics", label: "Diagnostics" },
+          { id: "logs", label: "Recent Logs" },
+        ],
+      },
+    ];
+
+    return (
+      <aside className={`sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
+        <div className="brand">
+          <div className="brand-mark">
+            <Icon path={icons.activity} size={20} />
+          </div>
+          {!sidebarCollapsed && (
+            <div className="brand-text">
+              <strong>Argus</strong>
+              <span>Workstation</span>
+            </div>
+          )}
+        </div>
+        {!sidebarCollapsed && (
+          <div className="sidebar-quick-actions">
+            <button
+              onClick={() => setPage("diagnostics")}
+              className="quick-action-pill"
+            >
+              <Icon path={icons.plus} size={14} /> Quick scan
+            </button>
+            <button
+              onClick={() => setPage("maintenance")}
+              className="quick-action-pill"
+            >
+              <Icon path={icons.plus} size={14} /> Free up space
+            </button>
+          </div>
+        )}
+        <nav className="navigation">
+          {groups.map((group) => {
+            const isOpen = openGroup === group.id;
+            const hasActiveChild = group.items.some((i) => i.id === page);
+            return (
+              <div key={group.id} className="nav-group">
+                <button
+                  className={`nav-group-header ${hasActiveChild ? "active-group" : ""}`}
+                  onClick={() => setOpenGroup(isOpen ? null : group.id)}
+                  aria-expanded={isOpen}
+                >
+                  <Icon path={group.icon} />
+                  {!sidebarCollapsed && <span>{group.id}</span>}
+                  {!sidebarCollapsed && (
+                    <Icon
+                      path={icons.chevronDown}
+                      className={`chevron ${isOpen ? "open" : ""}`}
+                      size={14}
+                    />
+                  )}
+                </button>
+                {!sidebarCollapsed && (
+                  <div className={`nav-group-children ${isOpen ? "open" : ""}`}>
+                    <div className="nav-group-children-inner">
+                      {group.items.map((item) => (
+                        <button
+                          key={item.id}
+                          className={`nav-child ${page === item.id ? "active" : ""}`}
+                          onClick={() => setPage(item.id as AppPage)}
+                        >
+                          {item.label}
+                          {page === item.id && (
+                            <Icon path={icons.chevronRight} size={14} />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </nav>
+        <div className="sidebar-footer">
           <button
-            className={`nav-item${page === "overview" ? " active" : ""}`}
-            aria-current={page === "overview" ? "page" : undefined}
-            onClick={() => setPage("overview")}
-          >
-            <span>◫</span> Overview
-          </button>
-          <button
-            className={`nav-item${page === "performance" ? " active" : ""}`}
-            aria-current={page === "performance" ? "page" : undefined}
-            onClick={() => setPage("performance")}
-          >
-            <span>▥</span> Performance
-          </button>
-          <button
-            className={`nav-item${page === "storage" ? " active" : ""}`}
-            aria-current={page === "storage" ? "page" : undefined}
-            onClick={() => setPage("storage")}
-          >
-            <span>▤</span> Storage
-          </button>
-          <button
-            className={`nav-item${page === "network" ? " active" : ""}`}
-            aria-current={page === "network" ? "page" : undefined}
-            onClick={() => setPage("network")}
-          >
-            <span>⌁</span> Network
-          </button>
-          <button
-            className={`nav-item${page === "processes" ? " active" : ""}`}
-            aria-current={page === "processes" ? "page" : undefined}
-            onClick={() => setPage("processes")}
-          >
-            <span>⌘</span> Processes
-          </button>
-          <button
-            className={`nav-item${page === "startup" ? " active" : ""}`}
-            aria-current={page === "startup" ? "page" : undefined}
-            onClick={() => setPage("startup")}
-          >
-            <span>◷</span> Startup
-          </button>
-          <button
-            className={`nav-item${page === "services" ? " active" : ""}`}
-            aria-current={page === "services" ? "page" : undefined}
-            onClick={() => setPage("services")}
-          >
-            <span>⚙</span> Services
-          </button>
-          <button
-            className={`nav-item${page === "system" ? " active" : ""}`}
-            aria-current={page === "system" ? "page" : undefined}
-            onClick={() => setPage("system")}
-          >
-            <span>ⓘ</span> System
-          </button>
-          <button
-            className={`nav-item${page === "diagnostics" ? " active" : ""}`}
-            aria-current={page === "diagnostics" ? "page" : undefined}
-            onClick={() => setPage("diagnostics")}
-          >
-            <span>▤</span> Diagnostics
-          </button>
-          <button
-            className={`nav-item${page === "logs" ? " active" : ""}`}
-            aria-current={page === "logs" ? "page" : undefined}
-            onClick={() => setPage("logs")}
-          >
-            <span>≡</span> Recent Logs
-          </button>
-          <button
-            className={`nav-item${page === "activity" ? " active" : ""}`}
-            aria-current={page === "activity" ? "page" : undefined}
-            onClick={() => setPage("activity")}
-          >
-            <span>↺</span> Activity
-          </button>
-          <button
-            className={`nav-item${page === "maintenance" ? " active" : ""}`}
-            aria-current={page === "maintenance" ? "page" : undefined}
-            onClick={() => setPage("maintenance")}
-          >
-            <span>⌕</span> Maintenance
-          </button>
-          <button
-            className={`nav-item${page === "sensors" ? " active" : ""}`}
-            aria-current={page === "sensors" ? "page" : undefined}
-            onClick={() => setPage("sensors")}
-          >
-            <span>°</span> Sensors
-          </button>
-          <button
-            className={`nav-item${page === "settings" ? " active" : ""}`}
-            aria-current={page === "settings" ? "page" : undefined}
+            className={`nav-item ${page === "settings" ? "active" : ""}`}
             onClick={() => setPage("settings")}
           >
-            <span>⚙</span> Settings
+            <Icon path={icons.settings} /> {!sidebarCollapsed && "Settings"}
           </button>
-        </nav>
-
-        <div className="sidebar-footer">
-          <span className="status-dot" />
-          <span>Local session</span>
+          <div className="sidebar-bottom-row">
+            {!sidebarCollapsed && (
+              <div className="sidebar-status">
+                <span className="status-dot" /> Local session
+              </div>
+            )}
+            <button
+              className="collapse-btn"
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            >
+              <Icon
+                path={sidebarCollapsed ? icons.chevronRight : icons.chevronDown}
+                size={16}
+              />
+            </button>
+          </div>
         </div>
       </aside>
+    );
+  };
 
-      <main className="main-content">
-        <header className="topbar">
-          <div className="breadcrumb">
-            KESTREL <span>/</span> {page.toUpperCase()}
+  const renderHeader = () => {
+    const hour = new Date().getHours();
+    const greeting =
+      hour < 12
+        ? "Good Morning"
+        : hour < 18
+          ? "Good Afternoon"
+          : "Good Evening";
+    const dateStr = new Date().toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+    return (
+      <header className="topbar">
+        <h1 className="greeting">
+          {greeting}, {username}!
+        </h1>
+        <div className="topbar-actions">
+          <div
+            className="search-pill"
+            onClick={() => setIsPaletteOpen(true)}
+            style={{ cursor: "pointer" }}
+          >
+            <Icon path={icons.search} size={16} />
+            <input type="text" placeholder="Search..." readOnly />
+            <span className="search-shortcut">⌘K</span>
           </div>
-          <button className="device-button">
-            <span className="status-dot" /> This device <span>⌄</span>
-          </button>
-        </header>
+          <div className="date-pill">
+            <Icon path={icons.calendar} size={16} />
+            {dateStr}
+          </div>
+          <div className="theme-toggle-pill">
+            <button
+              className={mode === "light" ? "active" : ""}
+              onClick={() => setMode("light")}
+              title="Light Theme"
+            >
+              <Icon path={icons.sun} size={16} />
+            </button>
+            <button
+              className={mode === "dark" ? "active" : ""}
+              onClick={() => setMode("dark")}
+              title="Dark Theme"
+            >
+              <Icon path={icons.moon} size={16} />
+            </button>
+          </div>
+          <div className="avatar">{username.charAt(0).toUpperCase()}</div>
+        </div>
+      </header>
+    );
+  };
 
-        <section className="page-heading">
-          <div>
-            <p className="eyebrow">
-              {page === "overview"
-                ? "SYSTEM DASHBOARD"
-                : page === "processes"
-                  ? "RUNNING APPLICATIONS AND SERVICES"
-                  : page === "storage"
-                    ? "DISKS AND VOLUMES"
-                    : page === "network"
-                      ? "NETWORK INTERFACES"
-                      : page === "startup"
-                        ? "LOGIN APPLICATIONS"
-                        : page === "services"
-                          ? "BACKGROUND SERVICES"
-                          : page === "system"
-                            ? "DEVICE INFORMATION"
-                            : page === "diagnostics"
-                              ? "SUPPORT TOOLS"
-                              : page === "logs"
-                              ? "SYSTEM JOURNAL"
-                              : page === "activity"
-                                ? "LOCAL ACTION HISTORY"
-                              : page === "maintenance"
-                                ? "STORAGE TOOLS"
-                                : page === "settings"
-                                  ? "PREFERENCES"
-                                  : page === "sensors"
-                                    ? "HARDWARE TEMPERATURES"
-                                    : "LIVE TELEMETRY"}
-            </p>
-            <h1>{page === "overview" ? "Overview" : page === "processes" ? "Processes" : page === "storage" ? "Storage" : page === "network" ? "Network" : page === "startup" ? "Startup" : page === "services" ? "Services" : page === "system" ? "System" : page === "diagnostics" ? "Diagnostics" : page === "logs" ? "Recent Logs" : page === "activity" ? "Activity" : page === "maintenance" ? "Maintenance" : page === "settings" ? "Settings" : page === "sensors" ? "Sensors" : "Performance"}</h1>
-            <p className="subheading">
-              {page === "overview"
-                ? "A clear view of your workstation, at a glance."
-                : page === "processes"
-                  ? "See which programs are using your system resources."
-                  : page === "storage"
-                    ? "Review mounted volumes and how their space is being used."
-                    : page === "network"
-                      ? "See live traffic and addresses for this device’s network interfaces."
-                      : page === "startup"
-                        ? "Review applications configured to start when you sign in."
-                        : page === "services"
-                          ? "Review service activity and its configured startup mode."
-                          : page === "system"
-                            ? "Review operating system, hardware, and desktop session details."
-                            : page === "diagnostics"
-                            ? "Create a local support summary and review it before saving."
-                            : page === "logs"
-                              ? "Review recent system messages from this boot. Entries are read-only and stay on this device."
-                              : page === "activity"
-                                ? "Review local records of process, service, startup, storage, and maintenance actions."
-                              : page === "maintenance"
-                              ? "Review large files and application cache usage without changing anything."
-                              : page === "settings"
-                                ? "Choose how Kestrel displays information on this device."
-                                : page === "sensors"
-                                  ? "Review temperatures reported by the available hardware sensors."
-                                  : "Inspect live processor, memory, and swap usage."}
-            </p>
-          </div>
-          <div className="refresh-state">
-            <span
-              className={
-                page === "overview"
-                  ? statusClass
-                  : page === "processes"
-                    ? processError
-                      ? "status-dot muted"
-                      : "status-dot"
-                    : page === "storage"
-                      ? storageError || partitionError
-                        ? "status-dot muted"
-                        : "status-dot"
-                      : page === "network"
-                        ? networkError
-                          ? "status-dot muted"
-                          : "status-dot"
-                        : page === "startup"
-                          ? startupError
-                            ? "status-dot muted"
-                            : "status-dot"
-                          : page === "services"
-                            ? serviceError
-                              ? "status-dot muted"
-                              : "status-dot"
-                            : page === "system"
-                              ? systemInfoError
-                                ? "status-dot muted"
-                                : "status-dot"
-                              : page === "diagnostics"
-                                ? diagnosticsStatus?.kind === "error"
-                                  ? "status-dot muted"
-                                  : "status-dot"
-                                : page === "logs"
-                                ? systemLogsError ? "status-dot muted" : "status-dot"
-                              : page === "activity"
-                                ? "status-dot"
-                              : page === "maintenance"
-                                  ? largeFileError || cacheError || logError
-                                    ? "status-dot muted"
-                                    : "status-dot"
-                                  : page === "performance"
-                                    ? performanceError
-                                      ? "status-dot muted"
-                                      : "status-dot"
-                                    : page === "sensors"
-                                      ? temperatureError ? "status-dot muted" : "status-dot"
-                                      : "status-dot"
-              }
-            />
-            {page === "overview"
-              ? statusText
-              : page === "processes"
-                ? processError
-                  ? "Process list unavailable"
-                  : processLoading
-                    ? "Reading processes"
-                    : `${processes.length} processes`
-                : page === "storage"
-                  ? storageError || partitionError
-                    ? "Storage information unavailable"
-                    : `${drives.length} mounted volumes`
-                  : page === "network"
-                    ? networkError
-                      ? "Network information unavailable"
-                      : networkLoading
-                        ? "Reading interfaces"
-                        : `${networkInterfaces.length} interfaces`
-                      : page === "startup"
-                        ? startupError
-                          ? "Startup information unavailable"
-                          : startupLoading
-                            ? "Reading startup entries"
-                            : `${startupApps.filter((startupApp) => startupApp.enabled).length} enabled entries`
-                        : page === "services"
-                          ? serviceError
-                            ? "Service information unavailable"
-                            : serviceLoading
-                              ? "Reading services"
-                              : `${services.length} services`
-                          : page === "system"
-                            ? systemInfoError
-                              ? "System information unavailable"
-                              : systemInfoLoading
-                                ? "Reading device information"
-                                : systemInfo?.operatingSystem ?? "System information unavailable"
-                            : page === "diagnostics"
-                              ? diagnosticsStatus?.message ?? (diagnosticsLoading ? "Collecting local details" : diagnosticsSnapshot ? "Report ready for review" : "No report collected")
-                              : page === "logs"
-                                ? systemLogsError ? "System journal unavailable" : systemLogsLoading ? "Reading system journal" : `${systemLogs.length} recent entries`
-                              : page === "activity"
-                                ? `${operationHistory.length} recorded actions`
-                              : page === "maintenance"
-                                ? largeFileError || cacheError || logError ? "Maintenance scan unavailable" : largeFileLoading || cacheLoading || logLoading ? "Scanning local files" : largeFileScan ? (largeFileScan.files.length + " large files found") : cacheInventory ? (formatProcessMemory(cacheInventory.totalBytes) + " in caches") : logInventory ? "Log sizes inspected" : "No folder scanned"
-                                : page === "settings"
-                                  ? "Preferences saved locally"
-                                  : page === "sensors"
-                                    ? temperatureError ? "Sensors unavailable" : temperatureLoading ? "Reading sensors" : `${temperatures.length} sensors`
-                                  : performanceError
-                                    ? "Performance information unavailable"
-                                    : performanceSnapshot
-                                    ? performanceSnapshot.cores.length + " logical processors"
-                                    : performanceLoading
-                                      ? "Reading performance"
-                                      : "Performance data unavailable"}
-          </div>
-        </section>
+  const renderDonutChart = () => {
+    const totalUsed = drives.reduce(
+      (acc, d) => acc + (d.totalBytes - d.availableBytes),
+      0,
+    );
+    const radius = 60;
+    const strokeWidth = 20;
+    const circumference = 2 * Math.PI * radius;
+    const colors = ["#a78bfa", "#6ee7b7", "#fbbf24", "#38bdf8"];
+    let currentOffset = 0;
+    if (drives.length === 0)
+      return (
+        <div className="text-muted text-center mt-4">No volumes found</div>
+      );
 
-        {page === "overview" ? (
-          <>
-        <section className="metric-grid" aria-label="System metrics">
-          {metrics.map((metric) => (
-            <article className="metric-card" key={metric.label}>
-              <div className="metric-top">
-                <span className="metric-icon">{metric.icon}</span>
-                <span className="metric-menu">•••</span>
+    return (
+      <div className="donut-container">
+        <svg
+          width="160"
+          height="160"
+          viewBox="0 0 160 160"
+          className="donut-svg"
+        >
+          {drives.map((drive, i) => {
+            const used = drive.totalBytes - drive.availableBytes;
+            let percent = totalUsed > 0 ? (used / totalUsed) * 100 : 0;
+            if (percent < 3 && percent > 0) percent = 3;
+            const strokeDasharray = `${(percent / 100) * circumference} ${circumference}`;
+            const strokeDashoffset = -((currentOffset / 100) * circumference);
+            currentOffset += percent;
+            return (
+              <circle
+                key={drive.mountPoint}
+                cx="80"
+                cy="80"
+                r={radius}
+                fill="transparent"
+                stroke={colors[i % colors.length]}
+                strokeWidth={strokeWidth}
+                strokeDasharray={strokeDasharray}
+                strokeDashoffset={strokeDashoffset}
+                strokeLinecap="round"
+                style={{ transition: "stroke-dasharray 0.5s ease" }}
+              />
+            );
+          })}
+        </svg>
+        <div className="donut-center">
+          <strong>{formatGiB(totalUsed)}</strong>
+          <span>GiB Used</span>
+        </div>
+      </div>
+    );
+  };
+
+  // --- Page Renderers ---
+  const renderOverview = () => (
+    <div className="overview-layout">
+      <div className="overview-left">
+        <div className="stats-row">
+          {metrics.map((m) => (
+            <article className="stat-card" key={m.label}>
+              <div className="stat-card-header">
+                <span className="stat-label">{m.label}</span>
+                <button className="stat-link" onClick={() => setPage(m.page)}>
+                  <Icon path={icons.arrowUpRight} size={14} />
+                </button>
               </div>
-              <p className="metric-label">{metric.label}</p>
-              <div className="metric-value">{metric.value}</div>
-              <p className="metric-detail">{metric.detail}</p>
+              <div className="stat-value">{m.value}</div>
+              <div className="stat-detail">{m.detail}</div>
             </article>
           ))}
-        </section>
-
-        <section className="content-grid">
-          <article className="panel activity-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">PERFORMANCE</p>
-                <h2>System activity</h2>
-              </div>
-              <label className="range-control">
-                <span className="sr-only">Chart time range</span>
-                <select
-                  className="period-select"
-                  value={historyWindow}
-                  onChange={(event) => setHistoryWindow(Number(event.target.value))}
-                >
-                  <option value={300}>Last 5 minutes</option>
-                  <option value={900}>Last 15 minutes</option>
-                  <option value={1800}>Last 30 minutes</option>
-                </select>
-              </label>
-            </div>
-            <div className="activity-chart">
-              <div className="chart-y-labels" aria-hidden="true">
-                <span>100%</span>
-                <span>50%</span>
-                <span>0%</span>
-              </div>
-              <div className="chart-plot">
-                <div className="chart-grid-lines" aria-hidden="true">
-                  <i />
-                  <i />
-                  <i />
-                </div>
-                {visibleHistory.length > 1 ? (
-                  <svg
-                    className="chart-svg"
-                    viewBox="0 0 1000 200"
-                    preserveAspectRatio="none"
-                    role="img"
-                    aria-label={`CPU ${Math.round(latestSample?.cpuPercent ?? 0)} percent; memory ${Math.round(latestSample?.memoryPercent ?? 0)} percent over the last ${historyRangeLabel}`}
-                  >
-                    <polyline className="chart-line cpu-line" points={cpuPoints} />
-                    <polyline className="chart-line memory-line" points={memoryPoints} />
-                  </svg>
-                ) : latestSample ? (
-                  <div
-                    className="chart-waiting"
-                    role="status"
-                  >
-                    Collecting the next sample to draw the chart…
-                  </div>
-                ) : (
-                  <div className="chart-waiting" role="status">
-                    Waiting for the first sample…
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="chart-footer">
-              <div className="chart-legend">
-                <span className="legend-cpu" /> CPU usage
-                <span className="legend-memory" /> Memory usage
-              </div>
-              <span className="chart-sample-count">
-                {latestSample
-                  ? `${sampleProgress} ${sampleProgress === 1 ? "sample" : "samples"} · ${historyRangeLabel}`
-                  : "Samples are collected once per second"}
+        </div>
+        <article className="chart-card">
+          <div className="chart-header">
+            <h2>System activity</h2>
+            <div className="chart-legend">
+              <span className="legend-item">
+                <span className="legend-chip cpu" /> CPU usage
+              </span>
+              <span className="legend-item">
+                <span className="legend-chip mem" /> Memory usage
               </span>
             </div>
-          </article>
-
-          <article className="panel storage-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">DISKS & VOLUMES</p>
-                <h2>Storage</h2>
-              </div>
-              <button className="icon-button" aria-label="Storage options">
-                •••
+            <select
+              className="period-select"
+              value={historyWindow}
+              onChange={(e) => setHistoryWindow(Number(e.target.value))}
+            >
+              <option value={300}>Last 5 minutes</option>
+              <option value={900}>Last 15 minutes</option>
+              <option value={1800}>Last 30 minutes</option>
+            </select>
+          </div>
+          <div className="chart-body">
+            <svg
+              viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+              preserveAspectRatio="none"
+              className="main-chart"
+            >
+              <defs>
+                <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop
+                    offset="0%"
+                    stopColor="var(--accent-violet)"
+                    stopOpacity="0.3"
+                  />
+                  <stop
+                    offset="100%"
+                    stopColor="var(--accent-violet)"
+                    stopOpacity="0"
+                  />
+                </linearGradient>
+                <linearGradient id="memGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop
+                    offset="0%"
+                    stopColor="var(--accent-amber)"
+                    stopOpacity="0.15"
+                  />
+                  <stop
+                    offset="100%"
+                    stopColor="var(--accent-amber)"
+                    stopOpacity="0"
+                  />
+                </linearGradient>
+              </defs>
+              <line
+                x1="0"
+                y1={chartHeight * 0.25}
+                x2={chartWidth}
+                y2={chartHeight * 0.25}
+                stroke="var(--border-subtle)"
+                strokeDasharray="4 4"
+              />
+              <line
+                x1="0"
+                y1={chartHeight * 0.5}
+                x2={chartWidth}
+                y2={chartHeight * 0.5}
+                stroke="var(--border-subtle)"
+                strokeDasharray="4 4"
+              />
+              <line
+                x1="0"
+                y1={chartHeight * 0.75}
+                x2={chartWidth}
+                y2={chartHeight * 0.75}
+                stroke="var(--border-subtle)"
+                strokeDasharray="4 4"
+              />
+              {visibleHistory.length > 1 && (
+                <>
+                  <path d={cpuAreaPath} fill="url(#cpuGrad)" />
+                  <path
+                    d={cpuPath}
+                    fill="none"
+                    stroke="var(--accent-violet)"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                  />
+                  <path d={memAreaPath} fill="url(#memGrad)" />
+                  <path
+                    d={memPath}
+                    fill="none"
+                    stroke="var(--accent-amber)"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                  />
+                </>
+              )}
+            </svg>
+          </div>
+        </article>
+        <div className="bottom-cards-row">
+          <article className="network-card">
+            <div className="card-header">
+              <span className="card-label">Network</span>
+              <button className="stat-link" onClick={() => setPage("network")}>
+                <Icon path={icons.arrowUpRight} size={14} />
               </button>
             </div>
-
-            {storageError ? (
-              <p className="metric-detail">
-                Could not load storage: {storageError}
-              </p>
-            ) : drives.length === 0 ? (
-              <p className="metric-detail">Looking for mounted drives…</p>
-            ) : (
-              <div className="drive-list">
-                {drives.map((drive) => {
-                  const usedBytes = Math.max(
-                    0,
-                    drive.totalBytes - drive.availableBytes,
-                  );
-                  const usedPercent =
-                    drive.totalBytes > 0
-                      ? Math.min(
-                          100,
-                          Math.round((usedBytes / drive.totalBytes) * 100),
-                        )
-                      : 0;
-                  const driveName =
-                    drive.name.trim() || drive.mountPoint || "Storage volume";
-
-                  return (
-                    <div className="drive-entry" key={drive.mountPoint}>
-                      <div className="drive-row">
-                        <div className="drive-icon">▰</div>
-                        <div className="drive-info">
-                          <strong>{driveName}</strong>
-                          <span>
-                            {drive.mountPoint}
-                            {drive.fileSystem ? ` · ${drive.fileSystem}` : ""}
-                          </span>
-                        </div>
-                        <span className="drive-state">{usedPercent}% used</span>
-                      </div>
-
-                      <div
-                        className="drive-track"
-                        aria-label={`${usedPercent}% of ${driveName} used`}
-                      >
-                        <span
-                          className="drive-fill"
-                          style={{ width: `${usedPercent}%` }}
-                        />
-                      </div>
-
-                      <p className="drive-capacity">
-                        {formatGiB(usedBytes)} GiB used of{" "}
-                        {formatGiB(drive.totalBytes)} GiB
-                        {" · "}
-                        {formatGiB(drive.availableBytes)} GiB free
-                        {drive.isRemovable ? " · Removable" : ""}
-                      </p>
-                    </div>
-                  );
-                })}
+            <div className="network-rates">
+              <div className="rate-block">
+                <span>↓ Download</span>
+                <strong>{formatNetworkRate(totalDownloadRate)}</strong>
               </div>
-            )}
-
-            <p className="metric-detail storage-refresh-note">
-              Drive information refreshes every 5 seconds.
-            </p>
+              <div className="rate-block">
+                <span>↑ Upload</span>
+                <strong>{formatNetworkRate(totalUploadRate)}</strong>
+              </div>
+            </div>
+            <div className="network-interface">
+              {nonLoopbackInterfaces[0]?.name || "No active interface"}
+            </div>
           </article>
-        </section>
-
-        <footer className="bottom-note">
-          <span className="note-icon">i</span>
-          {telemetryError
-            ? `Telemetry error: ${telemetryError}`
-            : telemetry
-              ? "CPU and memory are updating from this device."
-              : "Connecting to the local telemetry service..."}
-        </footer>
-          </>
-        ) : page === "processes" ? (
-          <section className="process-page" aria-labelledby="process-list-title">
-            <div className="process-toolbar">
-              <div>
-                <h2 id="process-list-title">Process list</h2>
-                <p>{filteredProcesses.length} of {processes.length} processes · refreshed every 2.5 seconds</p>
-              </div>
-              <div className="process-toolbar-controls">
-                <div className="process-view-switch" role="group" aria-label="Process list view">
-                  <button
-                    className={processViewMode === "list" ? "active" : ""}
-                    aria-pressed={processViewMode === "list"}
-                    onClick={() => setProcessViewMode("list")}
-                  >List</button>
-                  <button
-                    className={processViewMode === "tree" ? "active" : ""}
-                    aria-pressed={processViewMode === "tree"}
-                    onClick={() => setProcessViewMode("tree")}
-                  >Tree</button>
-                </div>
-                <label className="process-filter-label">
-                  <span className="sr-only">Filter processes by state</span>
-                  <select
-                    className="process-filter"
-                    value={processStateFilter}
-                    onChange={(event) => setProcessStateFilter(event.target.value as ProcessStateFilter)}
-                  >
-                    <option value="all">All states</option>
-                    <option value="running">Running</option>
-                    <option value="sleeping">Sleeping / idle</option>
-                    <option value="stopped">Stopped</option>
-                    <option value="zombie">Zombie</option>
-                  </select>
-                </label>
-              <label className="process-search">
-                <span className="sr-only">Search by process name or PID</span>
-                <span aria-hidden="true">⌕</span>
-                <input
-                  type="search"
-                  value={processQuery}
-                  onChange={(event) => setProcessQuery(event.target.value)}
-                  placeholder="Search processes…"
-                />
-              </label>
-              </div>
+          <article className="storage-bars-card">
+            <div className="card-header">
+              <span className="card-label">Storage</span>
+              <button className="stat-link" onClick={() => setPage("storage")}>
+                <Icon path={icons.arrowUpRight} size={14} />
+              </button>
             </div>
-
-            {processActionStatus && (
-              <div
-                className={`process-action-message ${processActionStatus.kind}`}
-                role={processActionStatus.kind === "error" ? "alert" : "status"}
-              >
-                {processActionStatus.message}
-              </div>
-            )}
-
-            {processError ? (
-              <div className="process-message" role="alert">
-                Could not read the process list: {processError}
-              </div>
-            ) : processLoading && processes.length === 0 ? (
-              <div className="process-message" role="status">
-                Reading running processes…
-              </div>
-            ) : filteredProcesses.length === 0 ? (
-              <div className="process-message" role="status">
-                {processQuery || processStateFilter !== "all" ? "No processes match these filters." : "No processes were found."}
-              </div>
-            ) : (
-              <div className="process-table-wrap">
-                <table className="process-table">
-                  <thead>
-                    <tr>
-                      <th aria-sort={processSort.key === "name" ? `${processSort.direction}ending` : "none"}>
-                        <button onClick={() => sortProcesses("name")}>Name <span>↕</span></button>
-                      </th>
-                      <th aria-sort={processSort.key === "pid" ? `${processSort.direction}ending` : "none"}>
-                        <button onClick={() => sortProcesses("pid")}>PID <span>↕</span></button>
-                      </th>
-                      <th aria-sort={processSort.key === "cpu" ? `${processSort.direction}ending` : "none"}>
-                        <button onClick={() => sortProcesses("cpu")}>CPU <span>↕</span></button>
-                      </th>
-                      <th aria-sort={processSort.key === "memory" ? `${processSort.direction}ending` : "none"}>
-                        <button onClick={() => sortProcesses("memory")}>Memory / RAM <span>↕</span></button>
-                      </th>
-                      <th aria-sort={processSort.key === "read" ? `${processSort.direction}ending` : "none"}>
-                        <button onClick={() => sortProcesses("read")}>Disk read <span>↕</span></button>
-                      </th>
-                      <th aria-sort={processSort.key === "write" ? `${processSort.direction}ending` : "none"}>
-                        <button onClick={() => sortProcesses("write")}>Disk write <span>↕</span></button>
-                      </th>
-                      <th className="process-action-heading">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {processTreeRows.map(({ process, depth, childCount }) => (
-                      <Fragment key={process.pid}>
-                      <tr>
-                        <td className="process-name" title={process.name || "Unnamed process"}>
-                          <span className="process-name-content" style={{ paddingLeft: processViewMode === "tree" ? `${Math.min(depth, 12) * 16}px` : undefined }}>
-                            {processViewMode === "tree" && childCount > 0 ? (
-                              <button
-                                className="process-tree-toggle"
-                                onClick={() => toggleProcessCollapsed(process.pid)}
-                                aria-expanded={!collapsedProcessPids.includes(process.pid)}
-                                aria-label={`${collapsedProcessPids.includes(process.pid) ? "Expand" : "Collapse"} ${process.name}, ${childCount} child processes`}
-                              >
-                                {collapsedProcessPids.includes(process.pid) ? "▸" : "▾"}
-                              </button>
-                            ) : processViewMode === "tree" ? <span className="process-tree-spacer" /> : null}
-                            <span>{process.name || "Unnamed process"}</span>
-                          </span>
-                        </td>
-                        <td className="process-number">{process.pid}</td>
-                        <td className="process-number process-cpu-cell">
-                          <strong>{process.cpuUsagePercent.toFixed(1)}%</strong>
-                          <span className="process-cpu-meter" aria-label={`${process.cpuUsagePercent.toFixed(1)} percent CPU`}>
-                            <span style={{ width: `${Math.max(0, Math.min(100, process.cpuUsagePercent))}%` }} />
-                          </span>
-                        </td>
-                        <td className="process-number process-memory-cell">
-                          <strong>{formatProcessMemory(process.memoryBytes)}</strong>
-                          <small>
-                            {telemetry && telemetry.memoryTotalBytes > 0
-                              ? `${(process.memoryBytes / telemetry.memoryTotalBytes * 100).toFixed(1)}% of RAM`
-                              : "RAM share unavailable"}
-                          </small>
-                        </td>
-                        <td className="process-number process-io-cell">
-                          {process.diskReadBytesPerSecond === null
-                            ? process.diskReadTotalBytes > 0 ? "Measuring…" : "—"
-                            : formatNetworkRate(process.diskReadBytesPerSecond)}
-                        </td>
-                        <td className="process-number process-io-cell">
-                          {process.diskWriteBytesPerSecond === null
-                            ? process.diskWriteTotalBytes > 0 ? "Measuring…" : "—"
-                            : formatNetworkRate(process.diskWriteBytesPerSecond)}
-                        </td>
-                        <td className="process-action-cell">
-                          <div className="process-row-actions">
-                          <button
-                            className="process-details-button"
-                            onClick={() => setSelectedProcessPid(
-                              selectedProcessPid === process.pid ? null : process.pid,
-                            )}
-                            aria-expanded={selectedProcessPid === process.pid}
-                            aria-controls={`process-details-${process.pid}`}
-                          >
-                            {selectedProcessPid === process.pid ? "Hide" : "Details"}
-                          </button>
-                          <button
-                            className="process-end-button"
-                            onClick={() => void requestProcessEnd(process)}
-                            disabled={terminatingPid !== null}
-                            aria-label={`End ${process.name || "unnamed process"}, PID ${process.pid}`}
-                          >
-                            {terminatingPid === process.pid ? "Sending…" : "End"}
-                          </button>
-                          <button
-                            className="process-force-button"
-                            onClick={() => void requestProcessForceStop(process)}
-                            disabled={terminatingPid !== null}
-                            aria-label={`Force stop ${process.name || "unnamed process"}, PID ${process.pid}`}
-                          >
-                            {terminatingPid === process.pid ? "Sending…" : "Force stop"}
-                          </button>
-                          </div>
-                        </td>
-                      </tr>
-                      {selectedProcessPid === process.pid && (
-                        <tr id={`process-details-${process.pid}`} className="process-details-row">
-                          <td className="process-details-cell" colSpan={7}>
-                            <dl className="process-details">
-                              <div><dt>State</dt><dd>{process.status}</dd></div>
-                              <div><dt>Parent PID</dt><dd>{process.parentPid ?? "Unavailable"}</dd></div>
-                              <div><dt>Running for</dt><dd>{formatProcessRuntime(process.runTimeSeconds)}</dd></div>
-                              <div><dt>Total disk read</dt><dd>{process.diskReadTotalBytes > 0 ? formatProcessMemory(process.diskReadTotalBytes) : "Not reported"}</dd></div>
-                              <div><dt>Total disk write</dt><dd>{process.diskWriteTotalBytes > 0 ? formatProcessMemory(process.diskWriteTotalBytes) : "Not reported"}</dd></div>
-                            </dl>
-                          </td>
-                        </tr>
-                      )}
-                      </Fragment>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <p className="process-footnote">
-              Per-process disk rates compare successive Linux I/O counters; protected processes may not report them. End requests normal termination; Force stop sends an immediate kill signal after confirmation. If Linux denies either action, Kestrel can ask for administrator authorization after another confirmation and rechecks the process identity before retrying. Unsaved work may be lost.
-            </p>
-          </section>
-        ) : page === "storage" ? (
-          <section className="storage-page" aria-labelledby="storage-page-title">
-            <div className="storage-page-toolbar">
-              <div>
-                <h2 id="storage-page-title">Mounted volumes</h2>
-                <p>{filteredDrives.length} of {drives.length} volumes · refreshes every 5 seconds</p>
-              </div>
-              <label className="volume-search">
-                <span className="sr-only">Search volumes</span>
-                <span aria-hidden="true">⌕</span>
-                <input
-                  type="search"
-                  value={driveQuery}
-                  onChange={(event) => setDriveQuery(event.target.value)}
-                  placeholder="Search name, mount point, or filesystem…"
-                />
-              </label>
-            </div>
-
-            {storageError ? (
-              <div className="storage-message" role="alert">
-                Could not read mounted volumes: {storageError}
-              </div>
-            ) : drives.length === 0 ? (
-              <div className="storage-message" role="status">
-                Looking for mounted volumes…
-              </div>
-            ) : filteredDrives.length === 0 ? (
-              <div className="storage-message" role="status">
-                No mounted volumes match your search.
-              </div>
-            ) : (
-              <div className="volume-grid">
-                {filteredDrives.map((drive) => {
-                  const usedBytes = Math.max(0, drive.totalBytes - drive.availableBytes);
-                  const usedPercent =
-                    drive.totalBytes > 0
-                      ? Math.min(100, Math.round((usedBytes / drive.totalBytes) * 100))
-                      : 0;
-                  const driveName = drive.name.trim() || drive.mountPoint || "Storage volume";
-
-                  return (
-                    <article className="volume-card" key={drive.mountPoint}>
-                      <div className="volume-card-heading">
-                        <div className="drive-icon">▰</div>
-                        <div className="volume-name">
-                          <h3>{driveName}</h3>
-                          <p>{drive.mountPoint}</p>
-                        </div>
-                        <span className="volume-state">
-                          {drive.mountPoint === "/" ? "System" : drive.isRemovable ? "Removable" : "Mounted"}
-                        </span>
-                      </div>
-                      <div className="volume-details">
-                        <span>{drive.fileSystem || "Filesystem unknown"}</span>
-                        {drive.isRemovable && <span>Removable device</span>}
-                      </div>
-                      <div className="volume-usage-labels">
-                        <span>Space used</span>
-                        <strong>{usedPercent}%</strong>
-                      </div>
+            <div className="storage-bars-list">
+              {drives.slice(0, 2).map((d) => {
+                const used = d.totalBytes - d.availableBytes;
+                const pct = d.totalBytes > 0 ? (used / d.totalBytes) * 100 : 0;
+                return (
+                  <div className="storage-bar-item" key={d.mountPoint}>
+                    <div className="storage-bar-labels">
+                      <span>{d.mountPoint}</span>
+                      <span>{Math.round(pct)}%</span>
+                    </div>
+                    <div className="storage-bar-track">
                       <div
-                        className="drive-track volume-track"
-                        role="progressbar"
-                        aria-label={`Space used on ${drive.mountPoint}`}
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={usedPercent}
-                      >
-                        <span className="drive-fill" style={{ width: `${usedPercent}%` }} />
-                      </div>
-                      <div className="volume-capacity-grid">
-                        <div><span>Used</span><strong>{formatGiB(usedBytes)} GiB</strong></div>
-                        <div><span>Free</span><strong>{formatGiB(drive.availableBytes)} GiB</strong></div>
-                        <div><span>Total</span><strong>{formatGiB(drive.totalBytes)} GiB</strong></div>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
-            <section className="drive-health-section" aria-labelledby="drive-health-title">
-              <div className="drive-health-heading">
-                <div>
-                  <h2 id="drive-health-title">Physical drive health</h2>
-                  <p>{driveHealthLoading && driveHealth.length === 0 ? "Reading UDisks health data…" : `${driveHealth.length} physical drives · refreshes every minute`}</p>
-                </div>
-                <button className="startup-refresh-button" type="button" disabled={driveHealthLoading} onClick={() => setDriveHealthRefreshKey((key) => key + 1)}>
-                  {driveHealthLoading ? "Reading…" : "Refresh health"}
-                </button>
-              </div>
-              {driveHealthError ? (
-                <div className="storage-message compact" role="alert">Could not read drive health: {driveHealthError}</div>
-              ) : driveHealthLoading && driveHealth.length === 0 ? (
-                <div className="storage-message compact" role="status">Reading cached drive health information…</div>
-              ) : driveHealth.length === 0 ? (
-                <div className="storage-message compact" role="status">No physical drives with UDisks health information were reported.</div>
-              ) : (
-                <div className="drive-health-grid">
-                  {driveHealth.map((drive) => {
-                    const statusLabel = drive.healthState === "healthy" ? "SMART healthy"
-                      : drive.healthState === "warning" ? "SMART warning"
-                        : drive.healthState === "unsupported" ? "SMART not supported" : "Status unavailable";
-                    const temperature = drive.temperatureCelsius === null ? null
-                      : temperatureUnit === "celsius" ? drive.temperatureCelsius
-                        : drive.temperatureCelsius * 9 / 5 + 32;
-                    return (
-                      <article className="drive-health-card" key={drive.path}>
-                        <div className="drive-health-card-heading">
-                          <div>
-                            <h3>{drive.model}</h3>
-                            <p>{drive.path}</p>
-                          </div>
-                          <span className={`drive-health-status ${drive.healthState}`}>{statusLabel}</span>
-                        </div>
-                        <div className="drive-health-metrics">
-                          <div><span>Temperature</span><strong>{temperature === null ? "Not reported" : `${temperature.toFixed(0)}°${temperatureUnit === "celsius" ? "C" : "F"}`}</strong></div>
-                          <div><span>Power-on time</span><strong>{drive.powerOnHours === null ? "Not reported" : `${drive.powerOnHours.toLocaleString()} h`}</strong></div>
-                          <div><span>Bad sectors</span><strong>{drive.badSectors === null ? "Not reported" : drive.badSectors.toLocaleString()}</strong></div>
-                          <div><span>Failing attributes</span><strong>{drive.attributesFailing === null ? "Not reported" : drive.attributesFailing.toLocaleString()}</strong></div>
-                        </div>
-                        <p className="drive-health-updated">{drive.smartUpdatedUnixSeconds ? `SMART data last updated ${new Date(drive.smartUpdatedUnixSeconds * 1000).toLocaleString()}` : "UDisks has no recent SMART update for this drive."}</p>
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-              <p className="storage-footnote">Health information is read from UDisks’ cached SMART data. Some drives expose only limited metrics; this is a warning indicator, not a guarantee against failure. Kestrel does not run self-tests or change drive settings.</p>
-            </section>
-            <section className="partition-inventory" aria-labelledby="partition-inventory-title">
-              <div className="partition-inventory-heading">
-                <div>
-                  <h2 id="partition-inventory-title">Detected partitions</h2>
-                  <p>{partitionLoading && partitions.length === 0 ? "Scanning block devices…" : `${filteredPartitions.length} of ${partitions.length} entries · refreshes every 15 seconds`}</p>
-                </div>
-              </div>
-
-              {partitionActionStatus && (
-                <div className={`storage-message compact ${partitionActionStatus.kind}`} role={partitionActionStatus.kind === "error" ? "alert" : "status"}>
-                  {partitionActionStatus.message}
-                </div>
-              )}
-
-              {partitionError ? (
-                <div className="storage-message compact" role="alert">
-                  Could not read the partition inventory: {partitionError}
-                </div>
-              ) : partitionLoading && partitions.length === 0 ? (
-                <div className="storage-message compact" role="status">Reading Linux block-device information…</div>
-              ) : filteredPartitions.length === 0 ? (
-                <div className="storage-message compact" role="status">
-                  {partitions.length === 0 ? "No partitions were reported by Linux." : "No partitions match your search."}
-                </div>
-              ) : (
-                <div className="partition-list">
-                  {filteredPartitions.map((partition) => {
-                    const isMounted = partition.mountPoints.some((point) => point !== "[SWAP]");
-                    const isActiveSwap = partition.mountPoints.includes("[SWAP]");
-                    const mountSummary = isMounted
-                      ? partition.mountPoints.filter((point) => point !== "[SWAP]").join(" · ")
-                      : isActiveSwap ? "Active swap" : "Not mounted";
-                    return (
-                      <article className="partition-row" key={partition.path || partition.name}>
-                        <div className="partition-device-icon" aria-hidden="true">▰</div>
-                        <div className="partition-main">
-                          <h3>{partition.path || partition.name}</h3>
-                          <p>{partition.label || "No label"} · {partition.fileSystem || "Filesystem not reported"}</p>
-                        </div>
-                        <div className="partition-capacity">
-                          <strong>{formatGiB(partition.sizeBytes)} GiB</strong>
-                          <span>{partition.isRemovable ? "Removable" : partition.deviceType === "part" ? "Partition" : "Disk volume"}</span>
-                        </div>
-                        <div className={`partition-mount-state${isMounted || isActiveSwap ? " mounted" : ""}`}>
-                          <span className="partition-state-dot" />
-                          <span>{mountSummary}</span>
-                        </div>
-                        {partition.deviceType === "part" && !isActiveSwap ? (
-                          <button
-                            className="partition-action-button"
-                            type="button"
-                            disabled={partitionActionPath !== null}
-                            onClick={() => void requestPartitionMount(partition, !isMounted)}
-                          >
-                            {partitionActionPath === partition.path ? "Working…" : isMounted ? "Unmount" : "Mount"}
-                          </button>
-                        ) : <span className="partition-action-unavailable">{isActiveSwap ? "In use as swap" : ""}</span>}
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
-            <p className="storage-footnote">
-              Mount and unmount use Linux’s UDisks authorization. Unmounting requires confirmation; active swap and system-critical mounts are protected. Filesystem repair is not performed here.
-            </p>
-          </section>
-        ) : page === "network" ? (
-          <section className="network-page" aria-labelledby="network-page-title">
-            <div className="network-toolbar">
-              <div>
-                <h2 id="network-page-title">Live network activity</h2>
-                <p>{networkLoading && networkInterfaces.length === 0 ? "Reading interface counters…" : `${networkInterfaces.length} interfaces · refreshes every second`}</p>
-              </div>
-            </div>
-
-            {networkError ? (
-              <div className="storage-message" role="alert">Could not read network interfaces: {networkError}</div>
-            ) : networkLoading && networkInterfaces.length === 0 ? (
-              <div className="storage-message" role="status">Reading local network information…</div>
-            ) : networkInterfaces.length === 0 ? (
-              <div className="storage-message" role="status">Linux did not report any network interfaces.</div>
-            ) : (
-              <>
-                <div className="network-rate-grid">
-                  <article className="network-rate-card download">
-                    <span>↓ DOWNLOAD</span>
-                    <strong>{formatNetworkRate(totalDownloadRate)}</strong>
-                    <small>Combined non-loopback traffic</small>
-                  </article>
-                  <article className="network-rate-card upload">
-                    <span>↑ UPLOAD</span>
-                    <strong>{formatNetworkRate(totalUploadRate)}</strong>
-                    <small>Combined non-loopback traffic</small>
-                  </article>
-                </div>
-                <section className="network-route-card" aria-labelledby="network-route-title">
-                  <div className="network-route-heading">
-                    <div>
-                      <h3 id="network-route-title">Connection details</h3>
-                      <p>Local routing and resolver settings</p>
+                        className="storage-bar-fill"
+                        style={{ width: `${pct}%` }}
+                      />
                     </div>
-                    <button className="startup-refresh-button" disabled={networkRouteLoading} onClick={() => setNetworkRouteRefreshKey((key) => key + 1)}>
-                      {networkRouteLoading ? "Reading…" : "Refresh"}
-                    </button>
                   </div>
-                  {networkRouteError ? (
-                    <div className="storage-message" role="alert">Could not read connection details: {networkRouteError}</div>
-                  ) : networkRouteLoading && !networkRouteInfo ? (
-                    <div className="storage-message" role="status">Reading local route and DNS settings…</div>
-                  ) : networkRouteInfo ? (
-                    <dl className="network-route-details">
-                      <div><dt>Local IP addresses</dt><dd>{networkInterfaces.filter((network) => !network.isLoopback).flatMap((network) => network.ipAddresses.map((address) => `${network.name}: ${address}`)).join(" · ") || "Not reported"}</dd></div>
-                      <div><dt>Default gateway</dt><dd>{networkRouteInfo.defaultGateway || "Not reported"}</dd></div>
-                      <div><dt>Route interface</dt><dd>{networkRouteInfo.defaultInterface || "Not reported"}</dd></div>
-                      <div><dt>Configured DNS servers</dt><dd>{networkRouteInfo.dnsServers.length ? networkRouteInfo.dnsServers.join(" · ") : networkRouteInfo.dnsError || "Not reported"}</dd></div>
-                    </dl>
-                  ) : null}
-                  <p className="network-route-note">DNS may show a local resolver address; that resolver can forward requests to upstream servers.</p>
-                </section>
-                <div className="network-interface-list">
-                  {networkInterfaces.map((network) => (
-                    <article className="network-interface-card" key={network.name}>
-                      <div className="network-interface-heading">
-                        <div className="network-interface-icon" aria-hidden="true">⌁</div>
-                        <div className="network-interface-title">
-                          <h3>{network.name}</h3>
-                          <p>{network.isLoopback ? "Loopback interface" : "Network interface"}</p>
-                        </div>
-                        <span className={`network-interface-badge${network.isLoopback ? " loopback" : ""}`}>
-                          {network.isLoopback ? "Local" : "Device"}
-                        </span>
-                      </div>
-                      <div className="network-interface-rates">
-                        <div><span>↓ Download</span><strong>{formatNetworkRate(network.downloadBytesPerSecond)}</strong></div>
-                        <div><span>↑ Upload</span><strong>{formatNetworkRate(network.uploadBytesPerSecond)}</strong></div>
-                      </div>
-                      <dl className="network-interface-details">
-                        <div><dt>IP addresses</dt><dd>{network.ipAddresses.length ? network.ipAddresses.join(" · ") : "None reported"}</dd></div>
-                        <div><dt>MAC address</dt><dd>{network.macAddress || "Unavailable"}</dd></div>
-                      </dl>
-                    </article>
-                  ))}
-                </div>
-              </>
-            )}
-            <p className="network-footnote">
-              Traffic rates are calculated from local interface counters. Combined rates exclude loopback; virtual interfaces can overlap with physical-interface counters. Kestrel does not inspect websites, connections, or network contents.
-            </p>
-          </section>
-        ) : page === "startup" ? (
-          <section className="startup-page" aria-labelledby="startup-page-title">
-            <div className="startup-toolbar">
-              <div>
-                <h2 id="startup-page-title">Applications at sign-in</h2>
-                <p>{startupLoading && startupApps.length === 0 ? "Reading startup entries…" : `${filteredStartupApps.length} of ${startupApps.length} entries`}</p>
-              </div>
-              <div className="startup-toolbar-actions">
-                <label className="startup-search">
-                  <span className="sr-only">Search startup applications</span>
-                  <span aria-hidden="true">⌕</span>
-                  <input
-                    type="search"
-                    value={startupQuery}
-                    onChange={(event) => setStartupQuery(event.target.value)}
-                    placeholder="Search name, command, or source…"
-                  />
-                </label>
-                <button
-                  className="startup-refresh-button"
-                  disabled={startupLoading}
-                  onClick={() => setStartupRefreshKey((key) => key + 1)}
-                >
-                  {startupLoading ? "Reading…" : "Refresh"}
-                </button>
-              </div>
+                );
+              })}
             </div>
-
-            {startupActionStatus && (
-              <div
-                className={`process-action-message ${startupActionStatus.kind}`}
-                role={startupActionStatus.kind === "error" ? "alert" : "status"}
-              >
-                {startupActionStatus.message}
-              </div>
-            )}
-
-            {startupError ? (
-              <div className="storage-message" role="alert">Could not read startup applications: {startupError}</div>
-            ) : startupLoading && startupApps.length === 0 ? (
-              <div className="storage-message" role="status">Reading local login-application entries…</div>
-            ) : filteredStartupApps.length === 0 ? (
-              <div className="storage-message" role="status">
-                {startupApps.length === 0 ? "No startup applications were found." : "No startup applications match your search."}
-              </div>
-            ) : (
-              <div className="startup-list">
-                {filteredStartupApps.map((startupApp) => (
-                  <article className="startup-entry" key={startupApp.id}>
-                    <div className="startup-entry-icon" aria-hidden="true">◷</div>
-                    <div className="startup-entry-main">
-                      <div className="startup-entry-title">
-                        <h3>{startupApp.name}</h3>
-                        <span className={`startup-state${startupApp.enabled ? " enabled" : " disabled"}`}>
-                          <span className="startup-state-dot" />
-                          {startupApp.enabled ? "Enabled" : "Disabled"}
-                        </span>
-                      </div>
-                      <p className="startup-entry-command">{startupApp.command || "Launch command not provided"}</p>
-                    </div>
-                    <div className="startup-entry-actions">
-                      <span className={`startup-source${startupApp.source === "User" ? " user" : ""}`}>
-                        {startupApp.isSystemEntry
-                          ? startupApp.hasUserOverride ? "System · your override" : "System default"
-                          : "User"}
-                      </span>
-                      {(startupApp.isSystemEntry || startupApp.source === "User") && startupApp.command.trim() ? (
-                        <button
-                          className="startup-toggle-button"
-                          disabled={startupActionId !== null}
-                          onClick={() => void requestStartupToggle(startupApp)}
-                        >
-                          {startupActionId === startupApp.id
-                            ? "Saving…"
-                            : startupApp.isSystemEntry
-                              ? startupApp.enabled ? "Disable for me" : "Enable for me"
-                              : startupApp.enabled ? "Disable" : "Enable"}
-                        </button>
-                      ) : (
-                        <span className="startup-managed-label">
-                          {!startupApp.command.trim() ? "No launch command" : "System-managed"}
-                        </span>
-                      )}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-            <p className="startup-footnote">
-              This list comes from local XDG autostart entries. You can change user entries directly and override system defaults for this account; shared system files remain unchanged. Changes apply at the next sign-in. Desktop-session rules can also affect whether an entry runs.
-            </p>
-          </section>
-        ) : page === "services" ? (
-          <section className="services-page" aria-labelledby="services-page-title">
-            <div className="services-toolbar">
-              <div>
-                <h2 id="services-page-title">System and user services</h2>
-                <p>{serviceLoading && services.length === 0 ? "Reading service managers…" : `${filteredServices.length} of ${services.length} services · available system and user controls`}</p>
-              </div>
-              <div className="services-toolbar-actions">
-                <label className="services-search">
-                  <span className="sr-only">Search services</span>
-                  <span aria-hidden="true">⌕</span>
-                  <input
-                    type="search"
-                    value={serviceQuery}
-                    onChange={(event) => {
-                      setServiceQuery(event.target.value);
-                      setServiceVisibleCount(60);
-                    }}
-                    placeholder="Search unit or description…"
-                  />
-                </label>
-                <select
-                  className="services-filter"
-                  aria-label="Filter services"
-                  value={serviceFilter}
-                  onChange={(event) => {
-                    setServiceFilter(event.target.value as ServiceFilter);
-                    setServiceVisibleCount(60);
+          </article>
+        </div>
+      </div>
+      <div className="overview-right">
+        <article className="process-list-card">
+          <div className="card-header">
+            <span className="card-label">Top processes</span>
+          </div>
+          <div className="process-mini-list">
+            {processes.slice(0, 5).map((p) => (
+              <div className="process-mini-item" key={p.pid}>
+                <div className="process-mini-icon">
+                  <Icon path={icons.processes} size={14} />
+                </div>
+                <div className="process-mini-info">
+                  <strong>{p.name}</strong>
+                  <span>PID {p.pid}</span>
+                </div>
+                <div
+                  className="process-mini-value"
+                  style={{
+                    color:
+                      p.cpuUsagePercent > 50
+                        ? "var(--accent-red)"
+                        : "var(--accent-teal)",
                   }}
                 >
-                  <option value="all">All states</option>
-                  <option value="active">Active</option>
-                  <option value="failed">Failed</option>
-                  <option value="enabled">Enabled at boot</option>
-                </select>
-                <button
-                  className="startup-refresh-button"
-                  disabled={serviceLoading}
-                  onClick={() => setServiceRefreshKey((key) => key + 1)}
-                >
-                  {serviceLoading ? "Reading…" : "Refresh"}
-                </button>
+                  {p.cpuUsagePercent.toFixed(1)}%
+                </div>
               </div>
-            </div>
+            ))}
+          </div>
+        </article>
+        <article className="donut-card">
+          <div className="card-header">
+            <span className="card-label">Storage by volume</span>
+          </div>
+          {renderDonutChart()}
+          <div className="donut-legend">
+            {drives.slice(0, 4).map((d, i) => (
+              <div className="legend-row" key={d.mountPoint}>
+                <span
+                  className="legend-dot"
+                  style={{
+                    background: ["#a78bfa", "#6ee7b7", "#fbbf24", "#38bdf8"][
+                      i % 4
+                    ],
+                  }}
+                />
+                <span className="legend-name">{d.mountPoint}</span>
+                <span className="legend-value">
+                  {formatGiB(d.totalBytes - d.availableBytes)} GiB
+                </span>
+              </div>
+            ))}
+          </div>
+        </article>
+      </div>
+    </div>
+  );
 
-            {serviceActionStatus && (
-              <div className={`service-action-message ${serviceActionStatus.kind}`} role={serviceActionStatus.kind === "error" ? "alert" : "status"}>
-                {serviceActionStatus.message}
-              </div>
-            )}
-            {serviceWarnings.length > 0 && (
-              <div className="service-warning" role="status">
-                {serviceWarnings.join(" ")}
-              </div>
-            )}
-            {serviceError ? (
-              <div className="storage-message" role="alert">Could not read services: {serviceError}</div>
-            ) : serviceLoading && services.length === 0 ? (
-              <div className="storage-message" role="status">Reading local systemd service information…</div>
-            ) : filteredServices.length === 0 ? (
-              <div className="storage-message" role="status">
-                {services.length === 0 ? "No services were reported by the available service managers." : "No services match your search and filter."}
-              </div>
-            ) : (
-              <div className="service-list">
-                {visibleServices.map((service) => (
-                  <article className="service-entry" key={`${service.scope}:${service.unit}`}>
-                    <div className="service-entry-main">
-                      <h3>{service.unit}</h3>
-                      <p>{service.description}</p>
-                      <button className="service-log-button" type="button" onClick={() => void showServiceLogs(service)}>
-                        {serviceLogTarget?.scope === service.scope && serviceLogTarget.unit === service.unit ? "Refresh logs" : "View recent logs"}
-                      </button>
-                    </div>
-                    <span className={`service-active-state ${service.activeState}`}>
-                      <span className="service-state-dot" />
-                      {service.activeState}{service.subState && service.subState !== service.activeState ? ` · ${service.subState}` : ""}
+  const renderProcesses = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Processes</h2>
+          <p>See which programs are using your system resources.</p>
+        </div>
+        <div className="flex gap-4">
+          <select
+            value={processStateFilter}
+            onChange={(e) =>
+              setProcessStateFilter(e.target.value as ProcessStateFilter)
+            }
+          >
+            <option value="all">All states</option>
+            <option value="running">Running</option>
+            <option value="sleeping">Sleeping</option>
+            <option value="stopped">Stopped</option>
+          </select>
+          <div className="search-bar">
+            <Icon path={icons.search} size={14} />
+            <input
+              type="search"
+              placeholder="Search processes..."
+              value={processQuery}
+              onChange={(e) => setProcessQuery(e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+      <div className="panel-card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>
+                  <button
+                    onClick={() => {
+                      setProcessSort((s) => ({
+                        key: "name",
+                        direction:
+                          s.key === "name" && s.direction === "desc"
+                            ? "asc"
+                            : "desc",
+                      }));
+                    }}
+                  >
+                    Name ↕
+                  </button>
+                </th>
+                <th>
+                  <button
+                    onClick={() => {
+                      setProcessSort((s) => ({
+                        key: "pid",
+                        direction:
+                          s.key === "pid" && s.direction === "desc"
+                            ? "asc"
+                            : "desc",
+                      }));
+                    }}
+                  >
+                    PID ↕
+                  </button>
+                </th>
+                <th>
+                  <button
+                    onClick={() => {
+                      setProcessSort((s) => ({
+                        key: "cpu",
+                        direction:
+                          s.key === "cpu" && s.direction === "desc"
+                            ? "asc"
+                            : "desc",
+                      }));
+                    }}
+                  >
+                    CPU ↕
+                  </button>
+                </th>
+                <th>
+                  <button
+                    onClick={() => {
+                      setProcessSort((s) => ({
+                        key: "memory",
+                        direction:
+                          s.key === "memory" && s.direction === "desc"
+                            ? "asc"
+                            : "desc",
+                      }));
+                    }}
+                  >
+                    Memory ↕
+                  </button>
+                </th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {processTreeRows.map(({ process, depth, childCount }) => (
+                <tr key={process.pid}>
+                  <td>
+                    <span
+                      style={{
+                        paddingLeft:
+                          processViewMode === "tree" ? `${depth * 16}px` : 0,
+                      }}
+                    >
+                      {processViewMode === "tree" && childCount > 0 ? "▾ " : ""}
+                      {process.name}
                     </span>
-                    <span className="service-startup-state">{service.startupState}</span>
-                    <span className={`service-scope${service.scope === "User" ? " user" : ""}`}>{service.scope}</span>
-                    <div className={`service-row-actions${service.scope === "System" ? " system" : ""}`}>
-                        {service.activeState === "active" ? (
-                          <button className="service-action-button stop" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "stop")}>
-                            {serviceActionUnit === service.unit ? (serviceActionPhase === "preview" ? "Checking…" : "Working…") : "Stop"}
-                          </button>
-                        ) : ["inactive", "failed"].includes(service.activeState) ? (
-                          <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "start")}>
-                            {serviceActionUnit === service.unit ? (serviceActionPhase === "preview" ? "Checking…" : "Working…") : "Start"}
-                          </button>
-                        ) : null}
-                        {service.startupState === "enabled" ? (
-                          <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "disable")}>
-                            {serviceActionUnit === service.unit ? (serviceActionPhase === "preview" ? "Checking…" : "Working…") : "Disable"}
-                          </button>
-                        ) : service.startupState === "disabled" ? (
-                          <button className="service-action-button" type="button" disabled={serviceActionUnit !== null} title={service.scope === "System" ? "Linux may ask for administrator authorization" : undefined} onClick={() => void requestServiceAction(service, "enable")}>
-                            {serviceActionUnit === service.unit ? (serviceActionPhase === "preview" ? "Checking…" : "Working…") : "Enable"}
-                          </button>
-                        ) : null}
-                    </div>
-                  </article>
-                ))}
+                  </td>
+                  <td>{process.pid}</td>
+                  <td>
+                    <strong>{process.cpuUsagePercent.toFixed(1)}%</strong>
+                  </td>
+                  <td>{formatProcessMemory(process.memoryBytes)}</td>
+                  <td>
+                    <button
+                      className="btn btn-danger"
+                      onClick={() => void requestProcessEnd(process)}
+                      disabled={terminatingPid !== null}
+                    >
+                      End
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderStorage = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Storage</h2>
+          <p>Review mounted volumes and how their space is being used.</p>
+        </div>
+      </div>
+      <div className="stats-row">
+        {drives.map((d) => {
+          const used = d.totalBytes - d.availableBytes;
+          const pct = d.totalBytes > 0 ? (used / d.totalBytes) * 100 : 0;
+          return (
+            <article className="stat-card" key={d.mountPoint}>
+              <div className="stat-card-header">
+                <span className="stat-label">{d.mountPoint}</span>
+                <span className="badge neutral">{d.fileSystem}</span>
               </div>
-            )}
-            {serviceLogTarget && (
-              <section className="service-logs-panel" aria-live="polite" aria-labelledby="service-logs-title">
-                <div className="service-logs-heading">
-                  <div>
-                    <h2 id="service-logs-title">Recent logs · {serviceLogTarget.unit}</h2>
-                    <p>{serviceLogTarget.scope} service · latest 100 journal entries</p>
-                  </div>
-                  <button className="startup-refresh-button" disabled={serviceLogsLoading} onClick={() => void showServiceLogs(serviceLogTarget)}>
-                    {serviceLogsLoading ? "Reading…" : "Refresh logs"}
-                  </button>
-                </div>
-                {serviceLogsError ? (
-                  <div className="storage-message" role="alert">Could not read service logs: {serviceLogsError}</div>
-                ) : serviceLogsLoading ? (
-                  <div className="storage-message" role="status">Reading recent journal entries…</div>
-                ) : serviceLogs.length === 0 ? (
-                  <div className="storage-message" role="status">No journal entries were found for this service.</div>
-                ) : (
-                  <div className="logs-list service-logs-list">
-                    {serviceLogs.map((entry, index) => (
-                      <article className={`log-entry severity-${entry.severity.toLocaleLowerCase()}`} key={`${entry.timestampMicros}-${index}`}>
-                        <div className="log-entry-meta">
-                          <time>{entry.timestampMicros ? new Date(entry.timestampMicros / 1000).toLocaleString() : "Time unavailable"}</time>
-                          <strong>{entry.source}</strong>
-                          <span className="log-severity">{entry.severity}</span>
-                        </div>
-                        <p>{entry.message}</p>
-                      </article>
-                    ))}
-                  </div>
-                )}
-              </section>
-            )}
-            {visibleServices.length < filteredServices.length && (
-              <button
-                className="service-show-more"
-                onClick={() => setServiceVisibleCount((count) => count + 60)}
+              <div className="stat-value">{formatGiB(d.totalBytes)} GiB</div>
+              <div className="stat-detail">
+                {formatGiB(used)} GiB used · {formatGiB(d.availableBytes)} GiB
+                free
+              </div>
+              <div className="storage-bar-track mt-4">
+                <div
+                  className="storage-bar-fill"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </article>
+          );
+        })}
+      </div>
+      <div className="panel-card mt-4">
+        <h3>Physical drive health</h3>
+        <div className="mt-4">
+          {driveHealth.map((d) => (
+            <div
+              className="flex justify-between items-center"
+              key={d.path}
+              style={{
+                padding: "12px 0",
+                borderBottom: "1px solid var(--border-subtle)",
+              }}
+            >
+              <div>
+                <strong>{d.model}</strong>
+                <div className="text-faint">{d.path}</div>
+              </div>
+              <span
+                className={`badge ${d.healthState === "healthy" ? "success" : "warning"}`}
               >
-                Show more services ({filteredServices.length - visibleServices.length} remaining)
-              </button>
-            )}
-            <p className="service-footnote">
-              Service status comes from the systemd system and user managers. Every listed service can be acted on when systemd exposes an available action. Kestrel explains known effects and asks for confirmation; Linux may request administrator authorization or refuse an operation that is unavailable on this system.
-            </p>
-          </section>
-        ) : page === "system" ? (
-          <section className="system-info-page" aria-labelledby="system-info-page-title">
-            <div className="system-info-heading">
-              <div>
-                <h2 id="system-info-page-title">This device</h2>
-                <p>Information read locally from Linux and the current desktop session.</p>
+                {d.healthState}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderNetwork = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Network</h2>
+          <p>Live traffic and addresses for this device.</p>
+        </div>
+      </div>
+      <div className="stats-row">
+        {networkInterfaces.map((n) => (
+          <article className="stat-card" key={n.name}>
+            <div className="stat-card-header">
+              <span className="stat-label">{n.name}</span>
+              <span className="badge neutral">{n.macAddress}</span>
+            </div>
+            <div className="flex justify-between mt-4">
+              <div className="flex-col">
+                <span className="text-muted">↓ Download</span>
+                <strong>{formatNetworkRate(n.downloadBytesPerSecond)}</strong>
+              </div>
+              <div className="flex-col">
+                <span className="text-muted">↑ Upload</span>
+                <strong>{formatNetworkRate(n.uploadBytesPerSecond)}</strong>
               </div>
             </div>
-            {systemInfoError ? (
-              <div className="storage-message" role="alert">Could not read system information: {systemInfoError}</div>
-            ) : !systemInfo ? (
-              <div className="storage-message" role="status">Reading device information…</div>
-            ) : (
-              <div className="system-info-grid">
-                <article className="system-info-card featured">
-                  <span className="system-info-label">OPERATING SYSTEM</span>
-                  <strong>{systemInfo.operatingSystem}</strong>
-                  <small>{systemInfo.kernelVersion ? `Kernel ${systemInfo.kernelVersion}` : "Kernel version unavailable"}</small>
-                </article>
-                <article className="system-info-card">
-                  <span className="system-info-label">PROCESSOR</span>
-                  <strong>{systemInfo.processor ?? "Unavailable"}</strong>
-                  <small>{systemInfo.logicalProcessors} logical processors{systemInfo.physicalCores ? ` · ${systemInfo.physicalCores} physical cores` : ""}</small>
-                </article>
-                <article className="system-info-card">
-                  <span className="system-info-label">MEMORY</span>
-                  <strong>{formatBytes(systemInfo.memoryTotalBytes)}</strong>
-                  <small>Total installed memory reported by Linux</small>
-                </article>
-                <article className="system-info-card">
-                  <span className="system-info-label">DEVICE</span>
-                  <strong>{systemInfo.hostName ?? "Unavailable"}</strong>
-                  <small>{systemInfo.architecture} architecture</small>
-                </article>
-                <article className="system-info-card">
-                  <span className="system-info-label">DESKTOP SESSION</span>
-                  <strong>{systemInfo.desktopEnvironment ?? "Unavailable"}</strong>
-                  <small>{systemInfo.sessionType ? `${systemInfo.sessionType} session` : "Session type unavailable"}</small>
-                </article>
-                <article className="system-info-card">
-                  <span className="system-info-label">UPTIME</span>
-                  <strong>{formatUptime(systemInfo.uptimeSeconds)}</strong>
-                  <small>Time since this system started</small>
-                </article>
-                {systemInfo.batteries.length === 0 ? (
-                  <article className="system-info-card">
-                    <span className="system-info-label">BATTERY</span>
-                    <strong>Not detected</strong>
-                    <small>This device does not expose battery status.</small>
-                  </article>
-                ) : systemInfo.batteries.map((battery) => (
-                  <article className="system-info-card battery-info-card" key={battery.name}>
-                    <span className="system-info-label">BATTERY · {battery.name}</span>
-                    <strong>{battery.capacityPercent === null ? "Unavailable" : battery.capacityPercent + "%"}</strong>
-                    {battery.capacityPercent !== null && (
-                      <div
-                        className="battery-meter"
-                        role="progressbar"
-                        aria-label={battery.name + " charge"}
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={battery.capacityPercent}
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderConnections = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Connections</h2>
+          <p>Active listening ports and owning processes.</p>
+        </div>
+        <div className="search-bar">
+          <Icon path={icons.search} size={14} />
+          <input
+            type="search"
+            placeholder="Search connections..."
+            value={connectionsQuery}
+            onChange={(e) => setConnectionsQuery(e.target.value)}
+          />
+        </div>
+      </div>
+      <div className="panel-card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Protocol</th>
+                <th>State</th>
+                <th>Local Address</th>
+                <th>Process</th>
+                <th>PID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredConnections.map((c, i) => (
+                <tr key={i}>
+                  <td>
+                    <span className="badge neutral">{c.protocol}</span>
+                  </td>
+                  <td>{c.state}</td>
+                  <td>{c.localAddress}</td>
+                  <td>{c.process}</td>
+                  <td>{c.pid}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderServices = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Services</h2>
+          <p>System and user services.</p>
+        </div>
+        <div className="flex gap-4">
+          <select
+            value={serviceFilter}
+            onChange={(e) => setServiceFilter(e.target.value as ServiceFilter)}
+          >
+            <option value="all">All states</option>
+            <option value="active">Active</option>
+            <option value="failed">Failed</option>
+          </select>
+          <div className="search-bar">
+            <Icon path={icons.search} size={14} />
+            <input
+              type="search"
+              placeholder="Search services..."
+              value={serviceQuery}
+              onChange={(e) => setServiceQuery(e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+      <div className="panel-card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Unit</th>
+                <th>Scope</th>
+                <th>State</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleServices.map((s) => (
+                <tr key={s.unit}>
+                  <td>
+                    <strong>{s.unit}</strong>
+                    <div className="text-faint">{s.description}</div>
+                  </td>
+                  <td>
+                    <span className="badge neutral">{s.scope}</span>
+                  </td>
+                  <td>
+                    <span
+                      className={`badge ${s.activeState === "active" ? "success" : "warning"}`}
+                    >
+                      {s.activeState}
+                    </span>
+                  </td>
+                  <td>
+                    {s.activeState === "active" ? (
+                      <button
+                        className="btn btn-danger"
+                        onClick={() => void requestServiceAction(s, "stop")}
                       >
-                        <span style={{ width: battery.capacityPercent + "%" }} />
-                      </div>
+                        Stop
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-primary"
+                        onClick={() => void requestServiceAction(s, "start")}
+                      >
+                        Start
+                      </button>
                     )}
-                    <small>{battery.status ?? "Charge state unavailable"}</small>
-                    <div className="battery-health-details">
-                      <span>Full capacity health</span>
-                      <strong>{battery.healthPercent === null ? "Unavailable" : `${battery.healthPercent}% of design`}</strong>
-                      <span>Charge cycles</span>
-                      <strong>{battery.cycleCount === null ? "Unavailable" : battery.cycleCount.toLocaleString()}</strong>
-                    </div>
-                  </article>
-                ))}
-                <article className="system-info-card system-info-wide usb-inventory-card">
-                  <span className="system-info-label">USB DEVICES</span>
-                  <strong>{systemInfo.usbDevices.length} detected</strong>
-                  <small>Device names and identifiers reported by Linux. Serial numbers and device contents are not read.</small>
-                  {systemInfo.usbDevices.length > 0 ? (
-                    <div className="usb-device-list">
-                      {systemInfo.usbDevices.map((device) => (
-                        <div className="usb-device-entry" key={device.path}>
-                          <div>
-                            <strong>{device.product ?? "USB device"}</strong>
-                            <span>{device.manufacturer ?? "Manufacturer unavailable"} · {device.path}</span>
-                          </div>
-                          <div className="usb-device-metadata">
-                            <span>ID {device.vendorId}:{device.productId}</span>
-                            <span>{device.speed ? `${device.speed} Mb/s` : "Speed unavailable"}</span>
-                            {device.busNumber && device.deviceNumber && <span>Bus {device.busNumber} · device {device.deviceNumber}</span>}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="storage-message" role="status">No USB devices are currently reported by Linux.</div>
-                  )}
-                </article>
-              </div>
-            )}
-            <p className="service-footnote">These details stay on this device. Some values depend on what the kernel and desktop environment make available.</p>
-          </section>
-        ) : page === "maintenance" ? (
-          <section className="maintenance-page" aria-labelledby="maintenance-page-title">
-            <div className="maintenance-heading">
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderSoftware = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Software</h2>
+          <p>Installed packages and updates.</p>
+        </div>
+        <div className="flex gap-4">
+          <select
+            value={packageFilter}
+            onChange={(e) => setPackageFilter(e.target.value as PackageFilter)}
+          >
+            <option value="upgradable">Updates available</option>
+            <option value="all">All installed</option>
+          </select>
+          <div className="search-bar">
+            <Icon path={icons.search} size={14} />
+            <input
+              type="search"
+              placeholder="Search packages..."
+              value={packageQuery}
+              onChange={(e) => setPackageQuery(e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+      <div className="panel-card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Source</th>
+                <th>Version</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visiblePackages.map((p) => (
+                <tr key={`${p.name}:${p.architecture}`}>
+                  <td>
+                    <strong>{p.name}</strong>
+                    <div className="text-faint">{p.summary}</div>
+                  </td>
+                  <td>
+                    <span className="badge neutral">{p.source}</span>
+                  </td>
+                  <td>
+                    {p.version}{" "}
+                    {p.upgradeVersion && (
+                      <span className="badge success">
+                        Update to {p.upgradeVersion}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderSettings = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Settings</h2>
+          <p>Preferences for this Argus installation.</p>
+        </div>
+      </div>
+      <div className="panel-card">
+        <div
+          className="flex justify-between items-center"
+          style={{
+            padding: "16px 0",
+            borderBottom: "1px solid var(--border-subtle)",
+          }}
+        >
+          <div>
+            <strong>Temperature units</strong>
+            <div className="text-faint">
+              Choose how temperatures are displayed.
+            </div>
+          </div>
+          <select
+            value={temperatureUnit}
+            onChange={(e) =>
+              setTemperatureUnit(e.target.value as TemperatureUnit)
+            }
+          >
+            <option value="celsius">Celsius (°C)</option>
+            <option value="fahrenheit">Fahrenheit (°F)</option>
+          </select>
+        </div>
+        <div
+          className="flex justify-between items-center"
+          style={{ padding: "16px 0" }}
+        >
+          <div>
+            <strong>Performance chart range</strong>
+            <div className="text-faint">
+              Default time range for the overview chart.
+            </div>
+          </div>
+          <select
+            value={historyWindow}
+            onChange={(e) => setHistoryWindow(Number(e.target.value))}
+          >
+            <option value={300}>5 minutes</option>
+            <option value={900}>15 minutes</option>
+            <option value={1800}>30 minutes</option>
+          </select>
+        </div>
+      </div>
+      <div className="panel-card mt-4">
+        <h3>About Argus</h3>
+        <p className="text-muted mt-4">
+          Version 0.1.0 · A local-first, AI-free Linux workstation utility.
+        </p>
+      </div>
+    </div>
+  );
+
+  const renderMaintenance = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Maintenance</h2>
+          <p>Clean caches, find large files, and inspect logs.</p>
+        </div>
+      </div>
+      <div className="panel-card">
+        <div className="flex justify-between items-center mb-4">
+          <h3>Application cache usage</h3>
+          <button
+            className="btn btn-primary"
+            onClick={() => void inspectCacheSizes()}
+          >
+            Inspect cache sizes
+          </button>
+        </div>
+        {cacheInventory &&
+          cacheInventory.entries.map((e) => (
+            <div
+              className="flex justify-between items-center"
+              key={e.name}
+              style={{
+                padding: "12px 0",
+                borderBottom: "1px solid var(--border-subtle)",
+              }}
+            >
               <div>
-                <h2 id="maintenance-page-title">Large file finder</h2>
-                <p>Scan one folder you choose. Kestrel reads file metadata only and never deletes or opens file contents.</p>
+                <strong>{e.name}</strong>
+                <div className="text-faint">{e.fileCount} files</div>
               </div>
-              <div className="maintenance-controls">
-                <label className="maintenance-threshold">
-                  <span>Minimum size</span>
-                  <select value={largeFileMinimum} onChange={(event) => { setLargeFileMinimum(Number(event.target.value)); setLargeFileScan(null); }}>
-                    <option value={100 * 1024 * 1024}>100 MiB</option>
-                    <option value={500 * 1024 * 1024}>500 MiB</option>
-                    <option value={1024 * 1024 * 1024}>1 GiB</option>
-                  </select>
-                </label>
-                <button className="startup-refresh-button" disabled={largeFileLoading} onClick={() => void chooseAndScanLargeFiles()}>
-                  {largeFileLoading ? "Scanning…" : "Choose folder and scan"}
-                </button>
-              </div>
-            </div>
-            <div className="maintenance-note">
-              Pick a focused folder such as Downloads or Videos. A scan stops after 100,000 entries or 20 seconds. Symbolic links are skipped, and no files are changed.
-            </div>
-            {largeFileError && <div className="storage-message" role="alert">Could not scan the folder: {largeFileError}</div>}
-            {largeFileLoading ? (
-              <div className="storage-message" role="status">Scanning file sizes and folders…</div>
-            ) : largeFileScan ? (
-              <>
-                <div className="maintenance-summary">
-                  <span>Folder <strong>{largeFileScan.root}</strong></span>
-                  <span>{largeFileScan.scannedEntries.toLocaleString()} entries checked</span>
-                  {largeFileScan.skippedEntries > 0 && <span>{largeFileScan.skippedEntries.toLocaleString()} inaccessible entries skipped</span>}
-                </div>
-                {largeFileScan.scanLimited && <div className="service-warning" role="status">The scan reached its workload limit. Choose a smaller folder for a more complete result.</div>}
-                {largeFileScan.resultsLimited && <div className="service-warning" role="status">Showing the 250 largest matching files.</div>}
-                {largeFileScan.files.length === 0 ? (
-                  <div className="storage-message" role="status">No files at or above {formatProcessMemory(largeFileMinimum)} were found in this scan.</div>
-                ) : (
-                  <div className="large-file-list">
-                    {largeFileScan.files.map((file) => (
-                      <article className="large-file-entry" key={file.path}>
-                        <div className="large-file-name">
-                          <strong>{file.path.split("/").pop() || file.path}</strong>
-                          <small>{file.path}</small>
-                        </div>
-                        <span>{formatProcessMemory(file.sizeBytes)}</span>
-                      </article>
-                    ))}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="storage-message" role="status">Choose a folder to start a read-only scan.</div>
-            )}
-            <section className="cache-inspector" aria-labelledby="cache-inspector-title">
-              <div className="cache-inspector-heading">
-                <div>
-                  <h2 id="cache-inspector-title">Application cache usage</h2>
-                  <p>Inspect the size of folders in your local cache directory.</p>
-                </div>
-                <button className="startup-refresh-button" disabled={cacheLoading} onClick={() => void inspectCacheSizes()}>
-                  {cacheLoading ? "Inspecting…" : cacheInventory ? "Refresh cache sizes" : "Inspect cache sizes"}
-                </button>
-              </div>
-              <div className="maintenance-note">
-                Kestrel inspects only your account’s cache folder. Clear actions are limited to folders within ~/.cache. Choose a specific application folder; close that app first because it may need to rebuild its cache. The inspection stops after 100,000 entries or 20 seconds and may show partial sizes.
-              </div>
-              {cacheActionStatus && (
-                <div className={cacheActionStatus.kind === "error" ? "process-action-message error" : "process-action-message"} role={cacheActionStatus.kind === "error" ? "alert" : "status"}>
-                  {cacheActionStatus.message}
-                </div>
-              )}
-              {cacheError && <div className="storage-message" role="alert">Could not inspect caches: {cacheError}</div>}
-              {cacheLoading ? (
-                <div className="storage-message" role="status">Calculating cache folder sizes…</div>
-              ) : cacheInventory ? cacheInventory.available ? (
-                <>
-                  <div className="maintenance-summary">
-                    <span>Total cache size <strong>{formatProcessMemory(cacheInventory.totalBytes)}</strong></span>
-                    <span>{cacheInventory.filesScanned.toLocaleString()} files checked</span>
-                    {cacheInventory.skippedEntries > 0 && <span>{cacheInventory.skippedEntries.toLocaleString()} entries unavailable</span>}
-                  </div>
-                  {cacheInventory.scanLimited && <div className="service-warning" role="status">The cache scan reached its workload limit and shows partial sizes.</div>}
-                  {cacheInventory.entries.length === 0 ? (
-                    <div className="storage-message" role="status">No cache files were found.</div>
-                  ) : (
-                    <div className="cache-size-list">
-                      {cacheInventory.entries.map((entry) => (
-                        <article className="cache-size-entry" key={entry.name}>
-                          <strong>{entry.name}</strong>
-                          <span>{formatProcessMemory(entry.sizeBytes)}</span>
-                          <small>{entry.fileCount.toLocaleString()} files</small>
-                          {entry.clearable && (
-                            <button
-                              className="cache-clear-button"
-                              disabled={cacheActionName !== null || cacheLoading}
-                              onClick={() => void clearCacheEntry(entry)}
-                            >
-                              {cacheActionName === entry.name ? "Clearing…" : "Clear"}
-                            </button>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="storage-message" role="status">No local cache directory was found.</div>
-              ) : (
-                <div className="storage-message" role="status">Cache sizes have not been inspected.</div>
-              )}
-            </section>
-            <section className="cache-inspector log-inspector" aria-labelledby="log-inspector-title">
-              <div className="cache-inspector-heading">
-                <div>
-                  <h2 id="log-inspector-title">System log usage</h2>
-                  <p>Review log file sizes and the journal’s reported disk usage.</p>
-                </div>
-                <button className="startup-refresh-button" disabled={logLoading} onClick={() => void inspectLogSizes()}>
-                  {logLoading ? "Inspecting…" : logInventory ? "Refresh log sizes" : "Inspect log sizes"}
-                </button>
-              </div>
-              <div className="maintenance-note">
-                Kestrel reads file metadata and asks journalctl for its disk-usage summary. It does not read log contents, clear logs, or change permissions.
-              </div>
-              {logError && <div className="storage-message" role="alert">Could not inspect logs: {logError}</div>}
-              {logLoading ? (
-                <div className="storage-message" role="status">Checking local log sizes…</div>
-              ) : logInventory ? (
-                <>
-                  {logInventory.logError && <div className="service-warning" role="status">{logInventory.logError}</div>}
-                  {logInventory.journalUsage ? (
-                    <div className="journal-usage-summary">
-                      <span>Journal disk usage</span>
-                      <strong>{logInventory.journalUsage}</strong>
-                      <small>Journal data may also be included in the /var/log total.</small>
-                    </div>
-                  ) : logInventory.journalError ? (
-                    <div className="service-warning" role="status">Journal usage unavailable: {logInventory.journalError}</div>
-                  ) : null}
-                  {logInventory.logDirectoryAvailable && (
-                    <>
-                      <div className="maintenance-summary">
-                        <span>Total size of files under /var/log <strong>{formatProcessMemory(logInventory.logBytes)}</strong></span>
-                        <span>{logInventory.scannedEntries.toLocaleString()} entries checked</span>
-                        {logInventory.skippedEntries > 0 && <span>{logInventory.skippedEntries.toLocaleString()} entries unavailable</span>}
-                      </div>
-                      {logInventory.scanLimited && <div className="service-warning" role="status">The log scan reached its workload limit and shows partial file sizes.</div>}
-                      {logInventory.files.length > 0 && (
-                        <>
-                          <h3 className="log-file-list-title">Largest files under /var/log</h3>
-                          <div className="large-file-list">
-                          {logInventory.files.map((file) => (
-                            <article className="large-file-entry" key={file.path}>
-                              <div className="large-file-name">
-                                <strong>{file.path.split("/").pop() || file.path}</strong>
-                                <small>{file.path}</small>
-                              </div>
-                              <span>{formatProcessMemory(file.sizeBytes)}</span>
-                            </article>
-                          ))}
-                          </div>
-                        </>
-                      )}
-                    </>
-                  )}
-                </>
-              ) : (
-                <div className="storage-message" role="status">Log sizes have not been inspected.</div>
-              )}
-            </section>
-            <p className="service-footnote">This finder only reports large files. It does not select files for deletion, clean caches, or change permissions.</p>
-          </section>
-        ) : page === "diagnostics" ? (
-          <section className="diagnostics-page" aria-labelledby="diagnostics-page-title">
-            <div className="diagnostics-heading">
-              <div>
-                <h2 id="diagnostics-page-title">Prepare a support report</h2>
-                <p>Collect a small system summary, review its contents, then choose where to save it.</p>
-              </div>
-              <button className="startup-refresh-button" disabled={diagnosticsLoading} onClick={() => void buildDiagnosticsReport()}>
-                {diagnosticsLoading ? "Collecting…" : diagnosticsReport ? "Refresh report" : "Collect report"}
-              </button>
-            </div>
-            <div className="diagnostics-privacy">
-              The report contains OS and hardware details plus current CPU and memory readings. It excludes the device name, account name, IP addresses, process names, and file paths. The report stays on this device unless you choose to share it.
-            </div>
-            {diagnosticsStatus && (
-              <div className={`diagnostics-status ${diagnosticsStatus.kind}`} role={diagnosticsStatus.kind === "error" ? "alert" : "status"}>
-                {diagnosticsStatus.message}
-              </div>
-            )}
-            {diagnosticsReport ? (
-              <>
-                <pre className="diagnostics-preview" aria-label="Diagnostics report preview">{diagnosticsReport}</pre>
-                <div className="diagnostics-actions">
-                  <button className="startup-refresh-button" disabled={diagnosticsSaving} onClick={() => void saveDiagnosticsReport()}>
-                    {diagnosticsSaving ? "Saving…" : "Save reviewed report…"}
+              <div className="flex gap-4 items-center">
+                <span>{formatProcessMemory(e.sizeBytes)}</span>
+                {e.clearable && (
+                  <button
+                    className="btn btn-danger"
+                    onClick={() => void clearCacheEntry(e)}
+                  >
+                    Clear
                   </button>
-                </div>
-              </>
-            ) : !diagnosticsLoading ? (
-              <div className="storage-message" role="status">No diagnostics have been collected. Choose “Collect report” to prepare a preview.</div>
-            ) : null}
-            <p className="service-footnote">Kestrel does not upload this report. Saving is optional and requires you to choose a file location.</p>
-          </section>
-        ) : page === "activity" ? (
-          <section className="activity-page" aria-labelledby="activity-title">
-            <div className="logs-toolbar">
-              <div>
-                <h2 id="activity-title">Kestrel operation history</h2>
-                <p>{operationHistory.length} of {MAX_OPERATION_HISTORY} most recent actions · stored on this device</p>
-              </div>
-              <button className="startup-refresh-button" onClick={clearOperationHistory} disabled={operationHistory.length === 0}>Clear history</button>
-            </div>
-            {operationHistory.length === 0 ? (
-              <div className="storage-message" role="status">No Kestrel actions have been recorded yet.</div>
-            ) : (
-              <div className="activity-list">
-                {operationHistory.map((entry) => (
-                  <article className={`activity-entry ${entry.outcome}`} key={entry.id}>
-                    <div className="activity-entry-meta">
-                      <time dateTime={new Date(entry.timestamp).toISOString()}>{new Date(entry.timestamp).toLocaleString()}</time>
-                      <span>{entry.category}</span>
-                      <strong className={entry.outcome}>{entry.outcome === "success" ? "Completed" : "Failed"}</strong>
-                    </div>
-                    <div className="activity-entry-body">
-                      <h3>{entry.action}</h3>
-                      <p className="activity-target">{entry.target}</p>
-                      <p>{entry.note}</p>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-            <p className="service-footnote">This history stays in Kestrel’s local app storage and keeps at most 250 entries. It records action names and targets, not command arguments, file contents, or credentials. Clearing the history does not undo any action.</p>
-          </section>
-        ) : page === "logs" ? (
-          <section className="logs-page" aria-labelledby="system-logs-title">
-            <div className="logs-toolbar">
-              <div>
-                <h2 id="system-logs-title">Recent system messages</h2>
-                <p>{filteredSystemLogs.length} of {systemLogs.length} entries · latest 300 from this boot</p>
-              </div>
-              <div className="logs-controls">
-                <label className="logs-range-label">
-                  <span className="sr-only">Filter logs by time range</span>
-                  <select value={systemLogsTimeRange} onChange={(event) => setSystemLogsTimeRange(event.target.value as LogTimeRange)}>
-                    <option value="all">All captured times</option>
-                    <option value="1h">Last hour</option>
-                    <option value="6h">Last 6 hours</option>
-                    <option value="24h">Last 24 hours</option>
-                  </select>
-                </label>
-                <label className="logs-severity-label">
-                  <span className="sr-only">Filter logs by severity</span>
-                  <select value={systemLogsSeverity} onChange={(event) => setSystemLogsSeverity(event.target.value as LogSeverityFilter)}>
-                    <option value="all">All severities</option>
-                    <option value="errors">Errors and above</option>
-                    <option value="warnings">Warnings</option>
-                    <option value="info">Notice and info</option>
-                    <option value="debug">Debug</option>
-                  </select>
-                </label>
-                <label className="logs-search">
-                  <span className="sr-only">Search log messages or sources</span>
-                  <span aria-hidden="true">⌕</span>
-                  <input type="search" value={systemLogsQuery} onChange={(event) => setSystemLogsQuery(event.target.value)} placeholder="Search messages…" />
-                </label>
-                <button className="startup-refresh-button" onClick={() => setSystemLogsRefreshKey((value) => value + 1)} disabled={systemLogsLoading}>
-                  {systemLogsLoading ? "Refreshing…" : "Refresh"}
-                </button>
-                <button className="startup-refresh-button" onClick={() => void exportSystemLogs()} disabled={systemLogsExporting || filteredSystemLogs.length === 0}>
-                  {systemLogsExporting ? "Exporting…" : "Export filtered"}
-                </button>
+                )}
               </div>
             </div>
-            {systemLogsStatus && (
-              <div className={systemLogsStatus.kind === "error" ? "process-action-message error" : "process-action-message"} role={systemLogsStatus.kind === "error" ? "alert" : "status"}>
-                {systemLogsStatus.message}
-              </div>
-            )}
-            {systemLogsError ? (
-              <div className="storage-message" role="alert">Could not read recent system messages: {systemLogsError}</div>
-            ) : systemLogsLoading && systemLogs.length === 0 ? (
-              <div className="storage-message" role="status">Reading the system journal…</div>
-            ) : filteredSystemLogs.length === 0 ? (
-              <div className="storage-message" role="status">{systemLogs.length ? "No log entries match these filters." : "No recent system messages were found."}</div>
-            ) : (
-              <div className="logs-list" role="list" aria-label="Recent system messages">
-                {filteredSystemLogs.map((entry, index) => (
-                  <article className={`log-entry severity-${entry.severity.toLocaleLowerCase()}`} key={`${entry.timestampMicros}-${index}`} role="listitem">
-                    <div className="log-entry-meta">
-                      <time dateTime={entry.timestampMicros ? new Date(entry.timestampMicros / 1000).toISOString() : undefined}>
-                        {formatSystemLogTimestamp(entry.timestampMicros)}
-                      </time>
-                      <span className="log-severity">{entry.severity}</span>
-                      <strong title={entry.source}>{entry.source}</strong>
-                    </div>
-                    <p>{entry.message}</p>
-                  </article>
-                ))}
-              </div>
-            )}
-            <p className="service-footnote">Kestrel reads up to 300 entries from the current boot using the local system journal. It does not edit or upload log data.</p>
-          </section>
-        ) : page === "sensors" ? (
-          <section className="sensors-page" aria-labelledby="sensors-page-title">
-            <div className="sensors-page-heading">
-              <div>
-                <h2 id="sensors-page-title">Hardware temperatures</h2>
-                <p>Sensor readings refresh every five seconds while this page is open.</p>
-              </div>
-              <span>{temperatures.length} readings</span>
+          ))}
+      </div>
+    </div>
+  );
+
+  const renderDiagnostics = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Diagnostics</h2>
+          <p>System health and support reports.</p>
+        </div>
+        <button
+          className="btn btn-primary"
+          onClick={() => void buildDiagnosticsReport()}
+        >
+          Collect report
+        </button>
+      </div>
+      <div className="panel-card">
+        <h3>System Health</h3>
+        {healthSnapshot && !healthSnapshot.healthy ? (
+          healthSnapshot.alerts.map((a, i) => (
+            <div
+              className={`badge ${a.severity === "critical" ? "danger" : "warning"}`}
+              key={i}
+              style={{
+                display: "block",
+                padding: "16px",
+                marginTop: "16px",
+                borderRadius: "10px",
+              }}
+            >
+              <strong>{a.title}</strong>
+              <p>{a.message}</p>
             </div>
-            {temperatureError ? (
-              <div className="storage-message" role="alert">Could not read hardware sensors: {temperatureError}</div>
-            ) : temperatureLoading && temperatures.length === 0 ? (
-              <div className="storage-message" role="status">Reading hardware sensors…</div>
-            ) : temperatures.length === 0 ? (
-              <div className="storage-message" role="status">No readable temperature sensors were reported by this device.</div>
-            ) : (
-              <div className="sensor-grid">
-                {[...temperatures].sort((a, b) => b.temperatureCelsius - a.temperatureCelsius).map((sensor, index) => {
-                  const value = temperatureUnit === "celsius" ? sensor.temperatureCelsius : sensor.temperatureCelsius * 9 / 5 + 32;
-                  const critical = sensor.criticalCelsius === null ? null : temperatureUnit === "celsius" ? sensor.criticalCelsius : sensor.criticalCelsius * 9 / 5 + 32;
-                  const percentToCritical = sensor.criticalCelsius && sensor.criticalCelsius > 0
-                    ? Math.max(0, Math.min(100, sensor.temperatureCelsius / sensor.criticalCelsius * 100))
-                    : null;
-                  const nearLimit = percentToCritical !== null && percentToCritical >= 85;
-                  return (
-                    <article className={`sensor-card${nearLimit ? " near-limit" : ""}`} key={`${sensor.label}-${index}`}>
-                      <div className="sensor-card-heading">
-                        <span className="sensor-icon" aria-hidden="true">°</span>
-                        <span className="sensor-state">{nearLimit ? "Near reported limit" : "Reading available"}</span>
-                      </div>
-                      <h3>{sensor.label || `Sensor ${index + 1}`}</h3>
-                      <strong className="sensor-value">{Math.round(value)}°{temperatureUnit === "celsius" ? "C" : "F"}</strong>
-                      {percentToCritical !== null ? (
-                        <>
-                          <div className="sensor-meter" aria-label={`${Math.round(percentToCritical)} percent of reported critical temperature`}>
-                            <span style={{ width: `${percentToCritical}%` }} />
-                          </div>
-                          <p>Critical limit reported at {Math.round(critical!)}°{temperatureUnit === "celsius" ? "C" : "F"}</p>
-                        </>
-                      ) : <p>No critical limit reported by this sensor</p>}
-                    </article>
-                  );
-                })}
-              </div>
-            )}
-            <p className="service-footnote">Temperatures and critical limits are supplied by the device’s sensor interface. Some hardware does not expose every sensor or limit.</p>
-          </section>
-        ) : page === "performance" ? (
-          <section className="performance-page" aria-labelledby="performance-page-title">
-            <div className="performance-page-heading">
-              <div>
-                <h2 id="performance-page-title">Live resource usage</h2>
-                <p>Readings refresh every second while this page is open.</p>
-              </div>
-            </div>
-            {performanceError ? (
-              <div className="storage-message" role="alert">Could not read performance data: {performanceError}</div>
-            ) : !performanceSnapshot ? (
-              <div className="storage-message" role="status">Reading processor and memory usage…</div>
-            ) : (
-              <>
-                <div className="performance-summary-grid">
-                  <article className="performance-summary-card">
-                    <span className="system-info-label">TOTAL CPU USAGE</span>
-                    <strong>{Math.round(performanceSnapshot.cpuUsagePercent)}%</strong>
-                    <div className="performance-meter"><span className="cpu" style={{ width: Math.max(0, Math.min(100, performanceSnapshot.cpuUsagePercent)) + "%" }} /></div>
-                  </article>
-                  <article className="performance-summary-card">
-                    <span className="system-info-label">MEMORY</span>
-                    <strong>{formatProcessMemory(performanceSnapshot.memoryUsedBytes)} <small>of {formatProcessMemory(performanceSnapshot.memoryTotalBytes)}</small></strong>
-                    <div className="performance-meter"><span className="memory" style={{ width: performanceSnapshot.memoryTotalBytes > 0 ? Math.max(0, Math.min(100, (performanceSnapshot.memoryUsedBytes / performanceSnapshot.memoryTotalBytes) * 100)) + "%" : "0%" }} /></div>
-                    <small>{formatProcessMemory(performanceSnapshot.memoryAvailableBytes)} available</small>
-                  </article>
-                  <article className="performance-summary-card">
-                    <span className="system-info-label">SWAP</span>
-                    <strong>{performanceSnapshot.swapTotalBytes > 0 ? formatProcessMemory(performanceSnapshot.swapUsedBytes) + " of " + formatProcessMemory(performanceSnapshot.swapTotalBytes) : "Not configured"}</strong>
-                    {performanceSnapshot.swapTotalBytes > 0 && (
-                      <div className="performance-meter"><span className="swap" style={{ width: Math.max(0, Math.min(100, (performanceSnapshot.swapUsedBytes / performanceSnapshot.swapTotalBytes) * 100)) + "%" }} /></div>
-                    )}
-                    <small>{performanceSnapshot.swapTotalBytes > 0 ? "Virtual memory in use" : "No swap space is available"}</small>
-                  </article>
-                </div>
-                <div className="performance-summary-grid performance-io-grid">
-                  <article className="performance-summary-card">
-                    <span className="system-info-label">DISK READ</span>
-                    <strong>{formatBytes(performanceSnapshot.diskReadBytesPerSecond)}<small>/s</small></strong>
-                    <small>Current read activity across mounted drives</small>
-                  </article>
-                  <article className="performance-summary-card">
-                    <span className="system-info-label">DISK WRITE</span>
-                    <strong>{formatBytes(performanceSnapshot.diskWriteBytesPerSecond)}<small>/s</small></strong>
-                    <small>Current write activity across mounted drives</small>
-                  </article>
-                </div>
-                <div className="performance-cores">
-                  <div className="performance-cores-heading">
-                    <h2>Logical processor usage</h2>
-                    <span>{performanceSnapshot.cores.length} processors</span>
-                  </div>
-                  <div className="performance-core-grid">
-                    {performanceSnapshot.cores.map((core) => (
-                      <article className="performance-core-card" key={core.name}>
-                        <div><strong>{core.name}</strong><span>{Math.round(core.usagePercent)}%</span></div>
-                        <div className="performance-meter"><span className={core.usagePercent >= 90 ? "high" : "cpu"} style={{ width: Math.max(0, Math.min(100, core.usagePercent)) + "%" }} /></div>
-                      </article>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-          </section>
+          ))
         ) : (
-          <section className="settings-page" aria-labelledby="settings-page-title">
-            <div className="settings-page-heading">
-              <h2 id="settings-page-title">Display preferences</h2>
-              <p>These choices are stored locally for this Kestrel installation.</p>
-            </div>
-            <div className="settings-list">
-              <div className="settings-row">
-                <div>
-                  <h3>Temperature units</h3>
-                  <p>Choose how hardware temperatures appear on Overview and Sensors.</p>
-                </div>
-                <select
-                  aria-label="Temperature units"
-                  value={temperatureUnit}
-                  onChange={(event) => setTemperatureUnit(event.target.value as TemperatureUnit)}
-                >
-                  <option value="celsius">Celsius (°C)</option>
-                  <option value="fahrenheit">Fahrenheit (°F)</option>
-                </select>
-              </div>
-              <div className="settings-row">
-                <div>
-                  <h3>Performance chart range</h3>
-                  <p>Choose the time range shown when you open the Overview.</p>
-                </div>
-                <select
-                  aria-label="Default performance chart range"
-                  value={historyWindow}
-                  onChange={(event) => setHistoryWindow(Number(event.target.value))}
-                >
-                  <option value={300}>5 minutes</option>
-                  <option value={900}>15 minutes</option>
-                  <option value={1800}>30 minutes</option>
-                </select>
-              </div>
-            </div>
-            <p className="service-footnote">The temperature preference changes display units only. Kestrel keeps collecting the same local sensor readings.</p>
-          </section>
+          <p className="text-muted mt-4">System is healthy.</p>
         )}
+      </div>
+      {diagnosticsReport && (
+        <div className="panel-card mt-4">
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+              fontFamily: "monospace",
+              fontSize: "12px",
+              color: "var(--text-muted)",
+            }}
+          >
+            {diagnosticsReport}
+          </pre>
+          <button
+            className="btn btn-secondary mt-4"
+            onClick={() => void saveDiagnosticsReport()}
+          >
+            Save Report
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderPerformance = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Performance</h2>
+          <p>Live processor, memory, and GPU usage.</p>
+        </div>
+      </div>
+      {performanceSnapshot && (
+        <div className="stats-row">
+          <article className="stat-card">
+            <div className="stat-card-header">
+              <span className="stat-label">Total CPU</span>
+            </div>
+            <div className="stat-value">
+              {Math.round(performanceSnapshot.cpuUsagePercent)}%
+            </div>
+          </article>
+          <article className="stat-card">
+            <div className="stat-card-header">
+              <span className="stat-label">Memory</span>
+            </div>
+            <div className="stat-value">
+              {formatProcessMemory(performanceSnapshot.memoryUsedBytes)}
+            </div>
+            <div className="stat-detail">
+              of {formatProcessMemory(performanceSnapshot.memoryTotalBytes)}
+            </div>
+          </article>
+          <article className="stat-card">
+            <div className="stat-card-header">
+              <span className="stat-label">Swap</span>
+            </div>
+            <div className="stat-value">
+              {formatProcessMemory(performanceSnapshot.swapUsedBytes)}
+            </div>
+            <div className="stat-detail">
+              of {formatProcessMemory(performanceSnapshot.swapTotalBytes)}
+            </div>
+          </article>
+        </div>
+      )}
+      {hardwareExtra && hardwareExtra.gpus.length > 0 && (
+        <div className="stats-row mt-4">
+          {hardwareExtra.gpus.map((gpu, i) => (
+            <article className="stat-card" key={i}>
+              <div className="stat-card-header">
+                <span className="stat-label">{gpu.name}</span>
+              </div>
+              <div className="stat-value">
+                {Math.round(gpu.utilizationPercent)}%
+              </div>
+              <div className="stat-detail">
+                {formatProcessMemory(gpu.vramUsedBytes)} /{" "}
+                {formatProcessMemory(gpu.vramTotalBytes)} VRAM
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      <div className="panel-card mt-4">
+        <h3>Logical processor usage</h3>
+        <div className="mt-4">
+          {performanceSnapshot?.cores.map((core) => (
+            <div
+              className="flex justify-between items-center"
+              key={core.name}
+              style={{
+                padding: "12px 0",
+                borderBottom: "1px solid var(--border-subtle)",
+              }}
+            >
+              <span>{core.name}</span>
+              <strong>{Math.round(core.usagePercent)}%</strong>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderSensors = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Sensors</h2>
+          <p>Hardware temperatures and fan speeds.</p>
+        </div>
+      </div>
+      <div className="stats-row">
+        {temperatures.map((s, i) => (
+          <article className="stat-card" key={i}>
+            <div className="stat-card-header">
+              <span className="stat-label">{s.label || "Sensor"}</span>
+            </div>
+            <div className="stat-value">
+              {Math.round(s.temperatureCelsius)}°C
+            </div>
+            <div className="stat-detail">
+              {s.criticalCelsius
+                ? `Critical at ${s.criticalCelsius}°C`
+                : "No critical limit"}
+            </div>
+          </article>
+        ))}
+      </div>
+      {hardwareExtra && hardwareExtra.fans.length > 0 && (
+        <div className="panel-card mt-4">
+          <h3>Cooling fans</h3>
+          <div className="mt-4">
+            {hardwareExtra.fans.map((f, i) => (
+              <div
+                className="flex justify-between items-center"
+                key={i}
+                style={{
+                  padding: "12px 0",
+                  borderBottom: "1px solid var(--border-subtle)",
+                }}
+              >
+                <span>{f.label}</span>
+                <strong>{f.rpm} RPM</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderSystem = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>System</h2>
+          <p>Device information and hardware details.</p>
+        </div>
+      </div>
+      {systemInfo && (
+        <div className="stats-row">
+          <article className="stat-card">
+            <div className="stat-card-header">
+              <span className="stat-label">Operating System</span>
+            </div>
+            <div className="stat-value" style={{ fontSize: "20px" }}>
+              {systemInfo.operatingSystem}
+            </div>
+            <div className="stat-detail">Kernel {systemInfo.kernelVersion}</div>
+          </article>
+          <article className="stat-card">
+            <div className="stat-card-header">
+              <span className="stat-label">Processor</span>
+            </div>
+            <div className="stat-value" style={{ fontSize: "16px" }}>
+              {systemInfo.processor}
+            </div>
+            <div className="stat-detail">
+              {systemInfo.logicalProcessors} logical processors
+            </div>
+          </article>
+          <article className="stat-card">
+            <div className="stat-card-header">
+              <span className="stat-label">Memory</span>
+            </div>
+            <div className="stat-value">
+              {formatBytes(systemInfo.memoryTotalBytes)}
+            </div>
+          </article>
+          <article className="stat-card">
+            <div className="stat-card-header">
+              <span className="stat-label">Uptime</span>
+            </div>
+            <div className="stat-value">
+              {formatUptime(systemInfo.uptimeSeconds)}
+            </div>
+          </article>
+        </div>
+      )}
+      {systemInfo && systemInfo.usbDevices.length > 0 && (
+        <div className="panel-card mt-4">
+          <h3>USB Devices</h3>
+          <div className="mt-4">
+            {systemInfo.usbDevices.map((d) => (
+              <div
+                className="flex justify-between items-center"
+                key={d.path}
+                style={{
+                  padding: "12px 0",
+                  borderBottom: "1px solid var(--border-subtle)",
+                }}
+              >
+                <div>
+                  <strong>{d.product}</strong>
+                  <div className="text-faint">{d.manufacturer}</div>
+                </div>
+                <span className="badge neutral">
+                  {d.vendorId}:{d.productId}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderActivity = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Activity</h2>
+          <p>Review local records of system actions.</p>
+        </div>
+        <div className="flex gap-4">
+          <button
+            className="btn btn-primary"
+            onClick={() =>
+              recordOperation({
+                category: "Process",
+                action: "Test Action",
+                target: "Test Target",
+                outcome: "success",
+                note: "This is a manual test entry.",
+              })
+            }
+          >
+            Add Test Entry
+          </button>
+          <button className="btn btn-secondary" onClick={clearOperationHistory}>
+            Clear history
+          </button>
+        </div>
+      </div>
+      <div className="panel-card">
+        {operationHistory.length === 0 ? (
+          <p className="text-muted">No actions recorded yet.</p>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Action</th>
+                  <th>Target</th>
+                  <th>Outcome</th>
+                </tr>
+              </thead>
+              <tbody>
+                {operationHistory.map((o) => (
+                  <tr key={o.id}>
+                    <td>{new Date(o.timestamp).toLocaleString()}</td>
+                    <td>{o.action}</td>
+                    <td>{o.target}</td>
+                    <td>
+                      <span
+                        className={`badge ${o.outcome === "success" ? "success" : "danger"}`}
+                      >
+                        {o.outcome}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderStartup = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Startup</h2>
+          <p>Applications configured to start at sign-in.</p>
+        </div>
+        <div className="search-bar">
+          <Icon path={icons.search} size={14} />
+          <input
+            type="search"
+            placeholder="Search startup apps..."
+            value={startupQuery}
+            onChange={(e) => setStartupQuery(e.target.value)}
+          />
+        </div>
+      </div>
+      <div className="panel-card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Command</th>
+                <th>Source</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredStartupApps.map((s) => (
+                <tr key={s.id}>
+                  <td>
+                    <strong>{s.name}</strong>
+                  </td>
+                  <td className="text-faint">{s.command}</td>
+                  <td>
+                    <span className="badge neutral">{s.source}</span>
+                  </td>
+                  <td>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => void requestStartupToggle(s)}
+                    >
+                      {s.enabled ? "Disable" : "Enable"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderLogs = () => (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <div>
+          <h2>Recent Logs</h2>
+          <p>System journal entries from this boot.</p>
+        </div>
+        <div className="flex gap-4">
+          <select
+            value={systemLogsSeverity}
+            onChange={(e) =>
+              setSystemLogsSeverity(e.target.value as LogSeverityFilter)
+            }
+          >
+            <option value="all">All</option>
+            <option value="errors">Errors</option>
+            <option value="warnings">Warnings</option>
+          </select>
+          <div className="search-bar">
+            <Icon path={icons.search} size={14} />
+            <input
+              type="search"
+              placeholder="Search logs..."
+              value={systemLogsQuery}
+              onChange={(e) => setSystemLogsQuery(e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+      <div className="panel-card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Source</th>
+                <th>Severity</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredSystemLogs.slice(0, 100).map((l, i) => (
+                <tr key={i}>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    {formatSystemLogTimestamp(l.timestampMicros)}
+                  </td>
+                  <td>{l.source}</td>
+                  <td>
+                    <span
+                      className={`badge ${l.severity === "Error" ? "danger" : l.severity === "Warning" ? "warning" : "neutral"}`}
+                    >
+                      {l.severity}
+                    </span>
+                  </td>
+                  <td>{l.message}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+
+  // --- Main Render ---
+  return (
+    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      {renderSidebar()}
+      <main className="main-content">
+        {renderHeader()}
+        <div className="content-container">
+          {page === "overview" && renderOverview()}
+          {page === "processes" && renderProcesses()}
+          {page === "storage" && renderStorage()}
+          {page === "network" && renderNetwork()}
+          {page === "connections" && renderConnections()}
+          {page === "services" && renderServices()}
+          {page === "software" && renderSoftware()}
+          {page === "settings" && renderSettings()}
+          {page === "maintenance" && renderMaintenance()}
+          {page === "diagnostics" && renderDiagnostics()}
+          {page === "performance" && renderPerformance()}
+          {page === "sensors" && renderSensors()}
+          {page === "system" && renderSystem()}
+          {page === "activity" && renderActivity()}
+          {page === "startup" && renderStartup()}
+          {page === "logs" && renderLogs()}
+        </div>
       </main>
+
+      {/* Command Palette Modal */}
+      {isPaletteOpen && (
+        <div
+          className="palette-overlay"
+          onClick={() => setIsPaletteOpen(false)}
+        >
+          <div className="palette-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="palette-search">
+              <Icon path={icons.search} size={20} />
+              <input
+                ref={paletteInputRef}
+                type="text"
+                placeholder="Search pages, actions, and settings..."
+                value={paletteQuery}
+                onChange={(e) => setPaletteQuery(e.target.value)}
+                onKeyDown={handlePaletteKeyDown}
+              />
+              <span className="palette-esc">ESC</span>
+            </div>
+            <div className="palette-results">
+              {filteredCommands.length === 0 ? (
+                <div className="palette-empty">No results found.</div>
+              ) : (
+                filteredCommands.map((cmd, idx) => (
+                  <button
+                    key={cmd.id}
+                    className={`palette-item ${idx === selectedCommandIndex ? "active" : ""}`}
+                    onClick={() => {
+                      cmd.action();
+                      setIsPaletteOpen(false);
+                    }}
+                    onMouseEnter={() => setSelectedCommandIndex(idx)}
+                  >
+                    <div className="palette-item-icon">
+                      <Icon path={cmd.icon} size={18} />
+                    </div>
+                    <div className="palette-item-text">
+                      <strong>{cmd.label}</strong>
+                      <span>{cmd.category}</span>
+                    </div>
+                    {idx === selectedCommandIndex && (
+                      <span className="palette-enter">↵</span>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

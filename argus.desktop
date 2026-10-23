@@ -1,0 +1,9 @@
+[Desktop Entry]
+Categories=Utility;System;
+Comment={{comment}}
+Exec={{exec}}
+Icon=argus
+Name={{name}}
+Terminal=false
+Type=Application
+StartupWMClass=argus

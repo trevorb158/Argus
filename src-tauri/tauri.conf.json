@@ -1,8 +1,7 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
-  "productName": "kestrel",
+  "productName": "Argus",
   "version": "0.1.0",
-  "identifier": "com.trevor.kestrel",
+  "identifier": "com.trevor.argus",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,9 +11,14 @@
   "app": {
     "windows": [
       {
-        "title": "kestrel",
-        "width": 800,
-        "height": 600
+        "title": "Argus Workstation",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
       }
     ],
     "security": {
@@ -30,6 +34,11 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "../argus.desktop"
+      }
+    }
   }
 }

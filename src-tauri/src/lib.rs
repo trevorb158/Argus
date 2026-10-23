@@ -7,7 +7,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sysinfo::{Components, Disks, Networks, Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
@@ -118,6 +118,30 @@ struct TemperatureSnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct GpuSnapshot {
+    name: String,
+    utilization_percent: f32,
+    vram_used_bytes: u64,
+    vram_total_bytes: u64,
+    temperature_celsius: Option<f32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FanSnapshot {
+    label: String,
+    rpm: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HardwareExtraSnapshot {
+    gpus: Vec<GpuSnapshot>,
+    fans: Vec<FanSnapshot>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DriveSnapshot {
     name: String,
     mount_point: String,
@@ -200,6 +224,42 @@ struct NetworkRouteSnapshot {
     dns_servers: Vec<String>,
     gateway_error: Option<String>,
     dns_error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkConnectionSnapshot {
+    protocol: String,
+    state: String,
+    local_address: String,
+    remote_address: String,
+    process: String,
+    pid: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct PackageSnapshot {
+    name: String,
+    version: String,
+    architecture: String,
+    status: String,
+    section: String,
+    installed_size_bytes: Option<u64>,
+    summary: String,
+    automatic: bool,
+    upgrade_version: Option<String>,
+    source: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackageInventory {
+    backend: String,
+    backend_detail: String,
+    packages: Vec<PackageSnapshot>,
+    warnings: Vec<String>,
+    last_index_unix_seconds: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -1040,7 +1100,7 @@ fn set_system_startup_override(
         return Err("This startup entry changed since the list was loaded. Refresh and try again.".to_string());
     }
     if base.command.trim().is_empty() {
-        return Err("This entry has no launch command, so Kestrel cannot safely change it.".to_string());
+        return Err("This entry has no launch command, so Argus cannot safely change it.".to_string());
     }
 
     let source_path = if path.is_file() && !parse_desktop_entry(&path, "User")?.command.trim().is_empty() {
@@ -1053,7 +1113,7 @@ fn set_system_startup_override(
     let updated_contents = update_desktop_entry(&contents, enabled)?;
     fs::create_dir_all(&directory)
         .map_err(|error| format!("Could not create your startup override directory: {error}"))?;
-    let temporary_path = directory.join(format!(".{id}.kestrel-{}.tmp", std::process::id()));
+    let temporary_path = directory.join(format!(".{id}.argus-{}.tmp", std::process::id()));
 
     let write_result = (|| -> Result<(), String> {
         let mut temporary_file = OpenOptions::new()
@@ -1120,7 +1180,7 @@ fn set_startup_enabled(
         return Ok(current);
     }
     if current.command.trim().is_empty() {
-        return Err("This entry has no launch command, so Kestrel cannot safely change it.".to_string());
+        return Err("This entry has no launch command, so Argus cannot safely change it.".to_string());
     }
 
     let contents = fs::read_to_string(&path)
@@ -1128,7 +1188,7 @@ fn set_startup_enabled(
     let updated_contents = update_desktop_entry(&contents, enabled)?;
     let metadata = fs::metadata(&path)
         .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
-    let temporary_path = directory.join(format!(".{id}.kestrel-{}.tmp", std::process::id()));
+    let temporary_path = directory.join(format!(".{id}.argus-{}.tmp", std::process::id()));
 
     let write_result = (|| -> Result<(), String> {
         let mut temporary_file = OpenOptions::new()
@@ -1258,6 +1318,151 @@ fn get_network_route_info() -> NetworkRouteSnapshot {
         Err(error) => (Vec::new(), Some(format!("Could not read resolver configuration: {error}"))),
     };
     NetworkRouteSnapshot { default_gateway, default_interface, dns_servers, gateway_error, dns_error }
+}
+
+#[tauri::command]
+fn get_network_connections() -> Result<Vec<NetworkConnectionSnapshot>, String> {
+    let output = Command::new("ss")
+        .args(["-tulpnH"])
+        .output()
+        .map_err(|e| format!("Could not run ss: {}", e))?;
+
+    if !output.status.success() {
+        return Err("Failed to query network connections".to_string());
+    }
+
+    let mut connections = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 6 {
+            let protocol = parts[0].to_string();
+            let state = parts[1].to_string();
+            let local_address = parts[4].to_string();
+            let remote_address = parts[5].to_string();
+            
+            let mut process = "Unknown".to_string();
+            let mut pid = None;
+            if parts.len() > 6 {
+                let proc_str = parts[6..].join(" ");
+                if let Some(start) = proc_str.find("users:((") {
+                    if let Some(end) = proc_str[start..].find("))") {
+                        let user_info = &proc_str[start + 8..start + end];
+                        let info_parts: Vec<&str> = user_info.split(',').collect();
+                        if let Some(name_part) = info_parts.get(0) {
+                            process = name_part.trim_matches('"').to_string();
+                        }
+                        if info_parts.len() > 1 {
+                            if let Some(pid_part) = info_parts[1].split('=').nth(1) {
+                                pid = pid_part.parse().ok();
+                            }
+                        }
+                    }
+                }
+            }
+            connections.push(NetworkConnectionSnapshot {
+                protocol,
+                state,
+                local_address,
+                remote_address,
+                process,
+                pid,
+            });
+        }
+    }
+    Ok(connections)
+}
+
+#[tauri::command]
+fn get_hardware_extra() -> HardwareExtraSnapshot {
+    let mut gpus = Vec::new();
+    let mut fans = Vec::new();
+
+    // 1. Check Nvidia
+    if let Ok(output) = Command::new("nvidia-smi")
+        .args(["--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"])
+        .output()
+    {
+        if output.status.success() {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+                if parts.len() >= 5 {
+                    gpus.push(GpuSnapshot {
+                        name: parts[0].to_string(),
+                        utilization_percent: parts[1].parse().unwrap_or(0.0),
+                        vram_used_bytes: parts[2].parse::<u64>().unwrap_or(0) * 1024 * 1024,
+                        vram_total_bytes: parts[3].parse::<u64>().unwrap_or(0) * 1024 * 1024,
+                        temperature_celsius: parts[4].parse().ok(),
+                    });
+                }
+            }
+        }
+    }
+
+    // 2. Check AMD/Intel sysfs
+    if gpus.is_empty() {
+        if let Ok(entries) = fs::read_dir("/sys/class/drm") {
+            for entry in entries.filter_map(Result::ok) {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("card") && !name.contains("-") {
+                    let device_path = entry.path().join("device");
+                    if device_path.exists() {
+                        let read_val = |file: &str| fs::read_to_string(device_path.join(file)).ok().and_then(|s| s.trim().parse::<u64>().ok());
+                        
+                        let util = read_val("gpu_busy_percent").unwrap_or(0) as f32;
+                        let vram_used = read_val("mem_info_vram_used").unwrap_or(0);
+                        let vram_total = read_val("mem_info_vram_total").unwrap_or(0);
+                        
+                        let mut temp = None;
+                        if let Ok(hwmon_entries) = fs::read_dir(device_path.join("hwmon")) {
+                            for hwmon in hwmon_entries.filter_map(Result::ok) {
+                                if let Ok(t_str) = fs::read_to_string(hwmon.path().join("temp1_input")) {
+                                    if let Ok(t) = t_str.trim().parse::<f32>() {
+                                        temp = Some(t / 1000.0);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        gpus.push(GpuSnapshot {
+                            name: format!("GPU ({})", name),
+                            utilization_percent: util,
+                            vram_used_bytes: vram_used,
+                            vram_total_bytes: vram_total,
+                            temperature_celsius: temp,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Check Fans via hwmon
+    if let Ok(entries) = fs::read_dir("/sys/class/hwmon") {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            let hw_name = fs::read_to_string(path.join("name")).ok().unwrap_or_else(|| "hwmon".to_string());
+            let hw_name = hw_name.trim();
+            
+            if hw_name == "thinkpad" || hw_name == "nct6775" || hw_name == "it87" || hw_name == "asus" || hw_name.contains("fan") || hw_name.contains("apple") {
+                for i in 1..=5 {
+                    let input_path = path.join(format!("fan{}_input", i));
+                    if let Ok(rpm_str) = fs::read_to_string(&input_path) {
+                        if let Ok(rpm) = rpm_str.trim().parse::<u32>() {
+                            let label_path = path.join(format!("fan{}_label", i));
+                            let label = fs::read_to_string(&label_path)
+                                .map(|l| l.trim().to_string())
+                                .unwrap_or_else(|_| format!("{} Fan {}", hw_name, i));
+                            
+                            fans.push(FanSnapshot { label, rpm });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    HardwareExtraSnapshot { gpus, fans }
 }
 
 #[tauri::command]
@@ -1797,7 +2002,7 @@ fn send_process_signal_with_pidfd(
     if pidfd < 0 {
         let error = std::io::Error::last_os_error();
         return if error.kind() == std::io::ErrorKind::PermissionDenied {
-            Err("Linux did not allow Kestrel to signal this process. It may require higher privileges.".to_string())
+            Err("Linux did not allow Argus to signal this process. It may require higher privileges.".to_string())
         } else {
             Err(format!("Linux could not open a stable handle to this process: {error}"))
         };
@@ -1809,7 +2014,7 @@ fn send_process_signal_with_pidfd(
     let signal_number = match signal {
         Signal::Term => libc::SIGTERM,
         Signal::Kill => libc::SIGKILL,
-        _ => return Err("Kestrel only allows normal termination or force stop through this control.".to_string()),
+        _ => return Err("Argus only allows normal termination or force stop through this control.".to_string()),
     };
     let result = unsafe {
         libc::syscall(
@@ -1825,7 +2030,7 @@ fn send_process_signal_with_pidfd(
     } else {
         let error = std::io::Error::last_os_error();
         if error.kind() == std::io::ErrorKind::PermissionDenied {
-            Err("Linux did not allow Kestrel to signal this process. It may require higher privileges.".to_string())
+            Err("Linux did not allow Argus to signal this process. It may require higher privileges.".to_string())
         } else {
             Err(format!("Linux could not signal the selected process: {error}"))
         }
@@ -1840,12 +2045,12 @@ fn send_process_signal(
     signal: Signal,
 ) -> Result<(), String> {
     if pid == 1 {
-        return Err("Kestrel will not signal the system's init process.".to_string());
+        return Err("Argus will not signal the system's init process.".to_string());
     }
 
     let target_pid = Pid::from_u32(pid);
     if sysinfo::get_current_pid().is_ok_and(|current_pid| current_pid == target_pid) {
-        return Err("Kestrel will not signal itself.".to_string());
+        return Err("Argus will not signal itself.".to_string());
     }
 
     let mut system = state
@@ -1872,7 +2077,7 @@ fn send_process_signal(
     #[cfg(not(target_os = "linux"))]
     match process.kill_with(signal) {
         Some(true) => Ok(()),
-        Some(false) => Err("Linux did not allow Kestrel to signal this process. It may require higher privileges.".to_string()),
+        Some(false) => Err("Linux did not allow Argus to signal this process. It may require higher privileges.".to_string()),
         None => Err("Process signaling is not supported on this system.".to_string()),
     }
 }
@@ -1906,10 +2111,10 @@ fn signal_process_as_authorized_user(
     signal: Signal,
 ) -> Result<(), String> {
     if pid == 1 {
-        return Err("Kestrel will not signal the system's init process.".to_string());
+        return Err("Argus will not signal the system's init process.".to_string());
     }
     if pid == caller_pid {
-        return Err("Kestrel will not signal its own desktop process.".to_string());
+        return Err("Argus will not signal its own desktop process.".to_string());
     }
     let status = fs::read_to_string("/proc/self/status")
         .map_err(|error| format!("Could not verify administrator authorization: {error}"))?;
@@ -1926,7 +2131,7 @@ fn signal_process_as_authorized_user(
 #[cfg(target_os = "linux")]
 pub fn handle_privileged_helper_args() -> Option<i32> {
     let mut args = env::args().skip(1);
-    if args.next().as_deref() != Some("--kestrel-admin-signal") {
+    if args.next().as_deref() != Some("--argus-admin-signal") {
         return None;
     }
     let result = (|| -> Result<(), String> {
@@ -1950,7 +2155,7 @@ pub fn handle_privileged_helper_args() -> Option<i32> {
     match result {
         Ok(()) => Some(0),
         Err(error) => {
-            eprintln!("Kestrel authorization helper: {error}");
+            eprintln!("Argus authorization helper: {error}");
             Some(1)
         }
     }
@@ -1965,10 +2170,10 @@ async fn signal_process_with_authorization(
 ) -> Result<(), String> {
     let signal = match signal.as_str() {
         "term" | "kill" => signal,
-        _ => return Err("Kestrel requested an unsupported process signal.".to_string()),
+        _ => return Err("Argus requested an unsupported process signal.".to_string()),
     };
     if pid == 1 || pid == std::process::id() {
-        return Err("Kestrel will not signal PID 1 or itself.".to_string());
+        return Err("Argus will not signal PID 1 or itself.".to_string());
     }
 
     #[cfg(target_os = "linux")]
@@ -1976,17 +2181,17 @@ async fn signal_process_with_authorization(
         tauri::async_runtime::spawn_blocking(move || {
             use std::os::unix::fs::MetadataExt;
             let executable = env::current_exe()
-                .map_err(|error| format!("Could not locate Kestrel for authorization: {error}"))?;
+                .map_err(|error| format!("Could not locate Argus for authorization: {error}"))?;
             let trusted_installation = executable.ancestors().all(|path| {
                 fs::metadata(path).is_ok_and(|metadata| metadata.uid() == 0 && metadata.mode() & 0o022 == 0)
             });
             if !trusted_installation {
-                return Err("Administrator retry requires Kestrel to be installed in a root-owned, non-user-writable path. It is unavailable from a development build.".to_string());
+                return Err("Administrator retry requires Argus to be installed in a root-owned, non-user-writable path. It is unavailable from a development build.".to_string());
             }
             let output = Command::new("pkexec")
                 .arg(executable)
                 .args([
-                    "--kestrel-admin-signal",
+                    "--argus-admin-signal",
                     signal.as_str(),
                     &pid.to_string(),
                     expected_name.as_str(),
@@ -2137,7 +2342,7 @@ fn change_partition_mount(path: String, mount: bool) -> Result<String, String> {
             return Err("Active swap cannot be unmounted from this page".to_string());
         }
         if mounted_paths.iter().any(|point| is_system_critical_mount(point)) {
-            return Err("Kestrel will not unmount a system-critical volume".to_string());
+            return Err("Argus will not unmount a system-critical volume".to_string());
         }
     }
 
@@ -2284,6 +2489,495 @@ fn get_storage() -> Vec<DriveSnapshot> {
         .collect()
 }
 
+fn file_unix_seconds(path: &str) -> Option<u64> {
+    fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
+}
+
+fn package_key(name: &str, architecture: &str) -> String {
+    if architecture.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name}:{architecture}")
+    }
+}
+
+fn parse_dpkg_query_line(line: &str) -> Option<PackageSnapshot> {
+    let mut fields = line.splitn(7, '\t');
+    let status = fields.next()?.trim();
+    if status.is_empty() || status == "not-installed" {
+        return None;
+    }
+    let name = fields.next()?.trim();
+    let version = fields.next()?.trim();
+    let architecture = fields.next()?.trim();
+    let installed_size = fields.next()?.trim();
+    let section = fields.next()?.trim();
+    let summary = fields.next().unwrap_or("").trim();
+    if name.is_empty() {
+        return None;
+    }
+    let installed_size_bytes = installed_size.parse::<u64>().ok().map(|kib| kib.saturating_mul(1024));
+    Some(PackageSnapshot {
+        name: name.to_string(),
+        version: version.to_string(),
+        architecture: architecture.to_string(),
+        status: status.to_string(),
+        section: section.to_string(),
+        installed_size_bytes,
+        summary: summary.to_string(),
+        automatic: false,
+        upgrade_version: None,
+        source: "APT".to_string(),
+    })
+}
+
+fn parse_apt_simulation(output: &str) -> BTreeMap<String, String> {
+    let mut upgrades = BTreeMap::new();
+    for line in output.lines() {
+        let Some(rest) = line.strip_prefix("Inst ") else {
+            continue;
+        };
+        let Some(name_end) = rest.find(' ') else {
+            continue;
+        };
+        let raw_name = &rest[..name_end];
+        let remainder = &rest[name_end + 1..];
+        if !remainder.starts_with('[') {
+            continue;
+        }
+        let Some(current_end) = remainder.find(']') else {
+            continue;
+        };
+        let Some(open_paren) = remainder[current_end + 1..].find('(') else {
+            continue;
+        };
+        let inside = remainder[current_end + 1 + open_paren + 1..]
+            .split_once(')')
+            .map(|(inside, _)| inside)
+            .unwrap_or(&remainder[current_end + 1 + open_paren + 1..]);
+        let Some(new_version) = inside.split_whitespace().next() else {
+            continue;
+        };
+        let architecture = inside
+            .rsplit_once('[')
+            .and_then(|(_, tail)| tail.strip_suffix(']'))
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let (name, name_arch) = raw_name
+            .split_once(':')
+            .map(|(name, arch)| (name, Some(arch)))
+            .unwrap_or((raw_name, None));
+        let architecture = name_arch.or(architecture).unwrap_or("");
+        upgrades.insert(package_key(name, architecture), new_version.to_string());
+        if !architecture.is_empty() {
+            upgrades.entry(name.to_string()).or_insert_with(|| new_version.to_string());
+        }
+    }
+    upgrades
+}
+
+fn parse_extended_states(contents: &str) -> BTreeMap<String, bool> {
+    let mut automatic = BTreeMap::new();
+    let mut name = None;
+    let mut architecture = String::new();
+    let mut auto_installed = false;
+    let mut flush = |name: &mut Option<String>, architecture: &mut String, auto_installed: &mut bool| {
+        if let Some(package) = name.take() {
+            if *auto_installed {
+                automatic.insert(package_key(&package, architecture), true);
+                automatic.entry(package).or_insert(true);
+            }
+        }
+        architecture.clear();
+        *auto_installed = false;
+    };
+    for line in contents.lines() {
+        if line.trim().is_empty() {
+            flush(&mut name, &mut architecture, &mut auto_installed);
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("Package: ") {
+            flush(&mut name, &mut architecture, &mut auto_installed);
+            name = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("Architecture: ") {
+            architecture = value.trim().to_string();
+        } else if let Some(value) = line.strip_prefix("Auto-Installed: ") {
+            auto_installed = value.trim() == "1";
+        }
+    }
+    flush(&mut name, &mut architecture, &mut auto_installed);
+    automatic
+}
+
+fn last_package_index_unix_seconds() -> Option<u64> {
+    [
+        "/var/lib/apt/periodic/update-success-stamp",
+        "/var/cache/apt/pkgcache.bin",
+        "/var/lib/apt/lists",
+    ]
+    .into_iter()
+    .filter_map(file_unix_seconds)
+    .max()
+}
+
+fn command_not_found(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound
+}
+
+fn collect_dpkg_packages() -> Result<Vec<PackageSnapshot>, String> {
+    let output = Command::new("dpkg-query")
+        .args([
+            "-W",
+            "-f",
+            "${db:Status-Status}\t${Package}\t${Version}\t${Architecture}\t${Installed-Size}\t${Section}\t${binary:Summary}\\n",
+        ])
+        .output()
+        .map_err(|error| {
+            if command_not_found(&error) {
+                "dpkg-query is not installed on this system.".to_string()
+            } else {
+                format!("Could not start dpkg-query: {error}")
+            }
+        })?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if message.is_empty() {
+            "Could not read the local Debian package database.".to_string()
+        } else {
+            message
+        });
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut packages = stdout.lines().filter_map(parse_dpkg_query_line).collect::<Vec<_>>();
+    packages.sort_by(|left, right| left.name.cmp(&right.name).then(left.architecture.cmp(&right.architecture)));
+    Ok(packages)
+}
+
+fn apply_package_annotations(packages: &mut [PackageSnapshot], warnings: &mut Vec<String>) {
+    match fs::read_to_string("/var/lib/apt/extended_states") {
+        Ok(contents) => {
+            let automatic = parse_extended_states(&contents);
+            for package in packages.iter_mut() {
+                package.automatic = automatic
+                    .get(&package_key(&package.name, &package.architecture))
+                    .or_else(|| automatic.get(&package.name))
+                    .copied()
+                    .unwrap_or(false);
+            }
+        }
+        Err(error) if command_not_found(&error) || error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => warnings.push(format!("Automatic-install marks could not be read: {error}")),
+    }
+
+    match Command::new("apt-get")
+        .args(["-s", "-o", "Debug::NoLocking=true", "upgrade"])
+        .output()
+    {
+        Ok(output) => {
+            if output.status.success() {
+                let upgrades = parse_apt_simulation(&String::from_utf8_lossy(&output.stdout));
+                for package in packages.iter_mut() {
+                    package.upgrade_version = upgrades
+                        .get(&package_key(&package.name, &package.architecture))
+                        .or_else(|| upgrades.get(&package.name))
+                        .cloned();
+                }
+            } else {
+                let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                warnings.push(if message.is_empty() {
+                    "Local apt cache could not be checked for available updates.".to_string()
+                } else {
+                    format!("Available updates could not be read from the local apt cache: {message}")
+                });
+            }
+        }
+        Err(error) if command_not_found(&error) => warnings.push(
+            "apt-get is not available, so Argus cannot compare installed packages with the local update cache."
+                .to_string(),
+        ),
+        Err(error) => warnings.push(format!("Could not start apt-get to check local updates: {error}")),
+    }
+}
+
+fn parse_human_size(size: &str) -> Option<u64> {
+    let size = size.trim();
+    if size.is_empty() { return None; }
+    let chars = size.chars();
+    let mut num_str = String::new();
+    let mut unit = String::new();
+    for c in chars {
+        if c.is_ascii_digit() || c == '.' {
+            num_str.push(c);
+        } else if c.is_alphabetic() {
+            unit.push(c);
+        }
+    }
+    let num: f64 = num_str.parse().ok()?;
+    let multiplier = match unit.to_lowercase().as_str() {
+        "b" => 1.0,
+        "kb" => 1024.0,
+        "mb" => 1024.0 * 1024.0,
+        "gb" => 1024.0 * 1024.0 * 1024.0,
+        _ => 1.0,
+    };
+    Some((num * multiplier) as u64)
+}
+
+fn collect_flatpak_packages() -> Vec<PackageSnapshot> {
+    let mut packages = Vec::new();
+    if let Ok(output) = Command::new("flatpak").args(["list", "--app", "--columns=name,application,version,size"]).output() {
+        if output.status.success() {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let parts: Vec<&str> = line.split('\t').collect();
+                if parts.len() >= 3 {
+                    let name = parts[0].trim().to_string();
+                    let id = parts[1].trim().to_string();
+                    let version = parts[2].trim().to_string();
+                    let size_str = parts.get(3).map(|s| s.trim()).unwrap_or("");
+                    let size_bytes = parse_human_size(size_str);
+
+                    packages.push(PackageSnapshot {
+                        name: format!("{} ({})", name, id),
+                        version,
+                        architecture: "flatpak".to_string(),
+                        status: "installed".to_string(),
+                        section: "Application".to_string(),
+                        installed_size_bytes: size_bytes,
+                        summary: "Flatpak application".to_string(),
+                        automatic: false,
+                        upgrade_version: None,
+                        source: "Flatpak".to_string(),
+                    });
+                }
+            }
+        }
+    }
+    packages
+}
+
+fn collect_snap_packages() -> Vec<PackageSnapshot> {
+    let mut packages = Vec::new();
+    if let Ok(output) = Command::new("snap").arg("list").output() {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for (i, line) in stdout.lines().enumerate() {
+                if i == 0 { continue; }
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let name = parts[0].to_string();
+                    let version = parts[1].to_string();
+                    packages.push(PackageSnapshot {
+                        name,
+                        version,
+                        architecture: "snap".to_string(),
+                        status: "installed".to_string(),
+                        section: "Application".to_string(),
+                        installed_size_bytes: None,
+                        summary: "Snap application".to_string(),
+                        automatic: false,
+                        upgrade_version: None,
+                        source: "Snap".to_string(),
+                    });
+                }
+            }
+        }
+    }
+    packages
+}
+
+fn collect_package_inventory() -> Result<PackageInventory, String> {
+    let mut packages = Vec::new();
+    let mut warnings = Vec::new();
+    let mut backends = Vec::new();
+
+    // APT
+    if let Ok(mut apt_packages) = collect_dpkg_packages() {
+        apply_package_annotations(&mut apt_packages, &mut warnings);
+        packages.extend(apt_packages);
+        backends.push("APT");
+    }
+
+    // Flatpak
+    let flatpak_packages = collect_flatpak_packages();
+    if !flatpak_packages.is_empty() {
+        packages.extend(flatpak_packages);
+        backends.push("Flatpak");
+    }
+
+    // Snap
+    let snap_packages = collect_snap_packages();
+    if !snap_packages.is_empty() {
+        packages.extend(snap_packages);
+        backends.push("Snap");
+    }
+
+    if backends.is_empty() {
+        return Ok(PackageInventory {
+            backend: "unavailable".to_string(),
+            backend_detail: "No supported package managers (APT, Flatpak, Snap) were found.".to_string(),
+            packages: Vec::new(),
+            warnings,
+            last_index_unix_seconds: None,
+        });
+    }
+
+    packages.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    Ok(PackageInventory {
+        backend: backends.join(", "),
+        backend_detail: "Combined inventory from APT, Flatpak, and Snap.".to_string(),
+        last_index_unix_seconds: last_package_index_unix_seconds(),
+        packages,
+        warnings,
+    })
+}
+
+#[tauri::command]
+async fn get_package_inventory() -> Result<PackageInventory, String> {
+    tauri::async_runtime::spawn_blocking(collect_package_inventory)
+        .await
+        .map_err(|error| format!("The software inventory could not finish: {error}"))?
+}
+
+#[tauri::command]
+async fn clean_package_cache() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut output_msg = Vec::new();
+
+        let out_remove = Command::new("pkexec").args(["apt-get", "autoremove", "-y"]).output()
+            .map_err(|e| format!("Failed to run autoremove: {}", e))?;
+        if out_remove.status.success() {
+            output_msg.push(String::from_utf8_lossy(&out_remove.stdout).trim().to_string());
+        } else {
+            let err = String::from_utf8_lossy(&out_remove.stderr).trim().to_string();
+            return Err(if err.is_empty() { "Autoremove failed or was cancelled.".to_string() } else { err });
+        }
+
+        let out_clean = Command::new("pkexec").args(["apt-get", "autoclean", "-y"]).output()
+            .map_err(|e| format!("Failed to run autoclean: {}", e))?;
+        if out_clean.status.success() {
+            output_msg.push(String::from_utf8_lossy(&out_clean.stdout).trim().to_string());
+        } else {
+            let err = String::from_utf8_lossy(&out_clean.stderr).trim().to_string();
+            return Err(if err.is_empty() { "Autoclean failed or was cancelled.".to_string() } else { err });
+        }
+
+        Ok(output_msg.join("\n\n"))
+    })
+    .await
+    .map_err(|e| format!("Clean task failed: {}", e))?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemHealthAlert {
+    severity: String,
+    title: String,
+    message: String,
+    action_page: Option<String>,
+    action_label: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemHealthSnapshot {
+    alerts: Vec<SystemHealthAlert>,
+    healthy: bool,
+}
+
+#[tauri::command]
+async fn get_system_health() -> Result<SystemHealthSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut alerts = Vec::new();
+
+        let disks = Disks::new_with_refreshed_list();
+        for disk in disks.list() {
+            if disk.total_space() > 0 {
+                let used_percent = (disk.total_space() - disk.available_space()) as f64 / disk.total_space() as f64 * 100.0;
+                if used_percent > 90.0 {
+                    alerts.push(SystemHealthAlert {
+                        severity: "critical".to_string(),
+                        title: "Disk space critically low".to_string(),
+                        message: format!("The volume mounted at {} is {:.0}% full. You may experience issues saving files.", disk.mount_point().to_string_lossy(), used_percent),
+                        action_page: Some("storage".to_string()),
+                        action_label: Some("Review Storage".to_string()),
+                    });
+                } else if used_percent > 80.0 {
+                    alerts.push(SystemHealthAlert {
+                        severity: "warning".to_string(),
+                        title: "Disk space running low".to_string(),
+                        message: format!("The volume mounted at {} is {:.0}% full.", disk.mount_point().to_string_lossy(), used_percent),
+                        action_page: Some("storage".to_string()),
+                        action_label: Some("Review Storage".to_string()),
+                    });
+                }
+            }
+        }
+
+        if let Ok(output) = Command::new("systemctl").args(["list-units", "--state=failed", "--no-legend", "--no-pager"]).output() {
+            if output.status.success() {
+                let failed_count = String::from_utf8_lossy(&output.stdout).lines().count();
+                if failed_count > 0 {
+                    alerts.push(SystemHealthAlert {
+                        severity: "critical".to_string(),
+                        title: "Failed System Services".to_string(),
+                        message: format!("{} systemd service(s) have failed. This may impact your system's stability.", failed_count),
+                        action_page: Some("services".to_string()),
+                        action_label: Some("Review Services".to_string()),
+                    });
+                }
+            }
+        }
+
+        if let Ok(output) = Command::new("apt-get").args(["-s", "-o", "Debug::NoLocking=true", "upgrade"]).output() {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let upgrade_count = stdout.lines().filter(|l| l.starts_with("Inst ")).count();
+                if upgrade_count > 0 {
+                    alerts.push(SystemHealthAlert {
+                        severity: "info".to_string(),
+                        title: "System Updates Available".to_string(),
+                        message: format!("{} package update(s) are available from your repositories.", upgrade_count),
+                        action_page: Some("software".to_string()),
+                        action_label: Some("View Updates".to_string()),
+                    });
+                }
+            }
+        }
+
+        let mut sys = System::new();
+        sys.refresh_memory();
+        if sys.total_memory() > 0 {
+            let mem_percent = sys.used_memory() as f64 / sys.total_memory() as f64 * 100.0;
+            if mem_percent > 90.0 {
+                alerts.push(SystemHealthAlert {
+                    severity: "warning".to_string(),
+                    title: "High Memory Usage".to_string(),
+                    message: format!("System memory is {:.0}% full. Consider closing unused applications.", mem_percent),
+                    action_page: Some("processes".to_string()),
+                    action_label: Some("View Processes".to_string()),
+                });
+            }
+        }
+
+        let healthy = alerts.is_empty();
+        Ok(SystemHealthSnapshot { alerts, healthy })
+    })
+    .await
+    .map_err(|e| format!("Health check failed: {e}"))?
+}
+
+#[tauri::command]
+fn get_username() -> String {
+    std::env::var("USER").unwrap_or_else(|_| "User".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut system = System::new();
@@ -2303,11 +2997,17 @@ pub fn run() {
             get_system_info,
             get_performance_snapshot,
             get_diagnostics_snapshot,
+            get_system_health,
+            get_hardware_extra,
+            get_network_connections,
+            get_username,
             save_text_file,
             get_temperatures,
             get_network_interfaces,
             get_network_route_info,
             get_startup_apps,
+            get_package_inventory,
+            clean_package_cache,
             get_services,
             get_service_action_preview,
             set_service_state,
@@ -2329,4 +3029,69 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_dpkg_query_line_reads_installed_package() {
+        let package = parse_dpkg_query_line(
+            "installed\t7zip\t23.01+dfsg-11\tamd64\t6158\tutils\t7-Zip file archiver with a high compression ratio",
+        )
+        .expect("installed package");
+        assert_eq!(package.name, "7zip");
+        assert_eq!(package.version, "23.01+dfsg-11");
+        assert_eq!(package.architecture, "amd64");
+        assert_eq!(package.status, "installed");
+        assert_eq!(package.section, "utils");
+        assert_eq!(package.installed_size_bytes, Some(6158 * 1024));
+        assert_eq!(package.summary, "7-Zip file archiver with a high compression ratio");
+        assert!(!package.automatic);
+        assert_eq!(package.upgrade_version, None);
+    }
+
+    #[test]
+    fn parse_dpkg_query_line_skips_not_installed() {
+        assert_eq!(
+            parse_dpkg_query_line("not-installed\tmissing\t\tamd64\t\t\t"),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_apt_simulation_reads_upgrade_and_architecture() {
+        let output = "\
+Inst ca-certificates [20260601~24.04.1] (20260816ubuntu0.24.04.1 Ubuntu:24.04/noble-security [all])
+Inst gir1.2-glib-2.0-dev [2.80.0-6ubuntu3.9] (2.80.0-6ubuntu3.10 Ubuntu:24.04/noble-updates [amd64]) []
+Remv obsolete [1.0]
+";
+        let upgrades = parse_apt_simulation(output);
+        assert_eq!(
+            upgrades.get("ca-certificates:all").map(String::as_str),
+            Some("20260816ubuntu0.24.04.1")
+        );
+        assert_eq!(
+            upgrades.get("gir1.2-glib-2.0-dev:amd64").map(String::as_str),
+            Some("2.80.0-6ubuntu3.10")
+        );
+        assert!(!upgrades.contains_key("obsolete"));
+    }
+
+    #[test]
+    fn parse_extended_states_marks_automatic_packages() {
+        let contents = "\
+Package: python3-blinker
+Architecture: amd64
+Auto-Installed: 1
+
+Package: argus
+Architecture: amd64
+Auto-Installed: 0
+";
+        let automatic = parse_extended_states(contents);
+        assert_eq!(automatic.get("python3-blinker:amd64"), Some(&true));
+        assert_eq!(automatic.get("argus:amd64"), None);
+    }
 }
